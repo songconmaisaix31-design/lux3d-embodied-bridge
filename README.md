@@ -169,6 +169,7 @@ design file.
 - [`docs/BENCH-COMMAND.md`](docs/BENCH-COMMAND.md) — 把资产交给引擎的命令、参数与两个实测坑。
 - [`docs/AHOLO-LUX3D.md`](docs/AHOLO-LUX3D.md) — 两次真实生成的记录：参数、字节数、面数、资产 id。
 - [`docs/APP.md`](docs/APP.md) — 应用那半边：三步流程、每一步的落盘产物、训练命令逐参数解释、HTTP API、以及每个页面元素的数据来源。
+- [`HANDOVER.md`](HANDOVER.md) — 交接文档：目录与环境、磁盘约定（`out/` 里有什么）、排错速查、已知边界、下一步路线与接手清单。
 
 ## Honest limits · 边界，写出来不藏着
 
@@ -186,6 +187,7 @@ design file.
 ```
 lux3d-embodied-bridge/
 ├── bridge.py                 # launcher: python bridge.py <command>
+├── HANDOVER.md               # 交接文档 · handover notes
 ├── src/lux3d_bridge/
 │   ├── aholo.py              # Lux3D async task client (create / poll / download)
 │   ├── glb.py                # GLB container -> world-space triangles
