@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Lux3D × OriEra · WebGL Viewer</title>
+<title>Lux3D → 机械臂 · 文生模型到训练台</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d1117'/%3E%3Crect x='8' y='9' width='16' height='14' rx='2' fill='none' stroke='%23ff7a3d' stroke-width='2'/%3E%3Cpath d='M8 14h16M14 9v14' stroke='%23ff7a3d' stroke-width='2'/%3E%3C/svg%3E" />
 <link rel="stylesheet" href="./style.css" />
 <script type="importmap">
@@ -21,13 +21,14 @@
   <header class="bar">
     <div class="brand">
       <span class="dot" id="server-dot" title="bridge server"></span>
-      <strong>LUX3D&nbsp;×&nbsp;ORIERA</strong>
+      <strong>LUX3D&nbsp;→&nbsp;ARM</strong>
       <span class="sep">/</span>
-      <span class="muted">WebGL viewer · 实机与它的生成资产</span>
+      <span class="muted">一行 prompt 到一个可复核的训练回执</span>
     </div>
     <div class="bar-right">
       <span class="chip" id="chip-robot">robot —</span>
       <span class="chip" id="chip-assets">assets —</span>
+      <span class="chip" id="chip-engine">engine —</span>
       <span class="chip" id="chip-key">key —</span>
     </div>
   </header>
@@ -41,13 +42,18 @@
     </section>
 
     <section>
+      <h2>Identity <span class="hint">/ 身份</span></h2>
+      <div id="identity" class="kv"><p class="empty">select an asset</p></div>
+    </section>
+
+    <section>
       <h2>Robot <span class="hint">/ 机械臂</span></h2>
       <div id="joints" class="joints"></div>
       <div class="row">
         <button id="btn-home" class="ghost" type="button">home</button>
         <button id="btn-play" class="ghost" type="button">演示动作</button>
       </div>
-      <p class="note" id="robot-note">kinematic preview only · 仅运动学示意，不是物理仿真</p>
+      <p class="note">kinematic preview only · 仅运动学示意，不是物理仿真</p>
     </section>
 
     <section>
@@ -64,7 +70,24 @@
     <div class="stage-top">
       <span class="tag" id="stage-asset">no asset</span>
       <span class="tag" id="stage-tcp">TCP —</span>
+      <span class="tag" id="stage-run" hidden>run —</span>
     </div>
+    <div class="progress" id="run-progress" hidden>
+      <div class="progress-line">
+        <span class="pulse"></span>
+        <strong id="run-state">running</strong>
+        <span class="muted" id="run-elapsed">0s</span>
+        <button id="btn-cancel" class="ghost small" type="button">cancel</button>
+      </div>
+      <div class="progress-last" id="run-lastline"></div>
+    </div>
+    <section class="drawer" id="activity">
+      <header>
+        <span>activity <span class="hint">/ 活动</span></span>
+        <button id="btn-clear-log" class="ghost small" type="button">clear</button>
+      </header>
+      <pre id="job-log" class="job-log" aria-live="polite"></pre>
+    </section>
     <p class="caption">
       Arm geometry parsed from <code id="urdf-source">fixtures/desk_arm.urdf</code>; the object is the Lux3D <code>.glb</code>,
       the translucent shell is the <code>.stl</code> the bench collides with.
@@ -73,22 +96,18 @@
   </main>
 
   <aside class="panel right">
-    <section>
-      <h2>Identity <span class="hint">/ 身份</span></h2>
-      <div id="identity" class="kv"><p class="empty">select an asset</p></div>
-    </section>
+    <div class="flow" id="flow">
+      <div class="step" data-step="generate"><span class="n">1</span>生成</div>
+      <div class="step" data-step="train"><span class="n">2</span>训练</div>
+      <div class="step" data-step="results"><span class="n">3</span>回执</div>
+    </div>
 
-    <section>
-      <h2>Receipt <span class="hint">/ 回执</span></h2>
-      <div id="receipt" class="kv"><p class="empty">no receipt found</p></div>
-    </section>
-
-    <section>
-      <h2>Generate <span class="hint">/ 生成</span></h2>
+    <section class="tab-panel" data-panel="generate">
+      <h2>Generate <span class="hint">/ 文生模型</span></h2>
       <form id="gen-form" autocomplete="off">
         <label class="field">
           <span>prompt</span>
-          <textarea id="gen-prompt" rows="2" placeholder="a small wooden shipping crate with metal corner brackets, single object, centered"></textarea>
+          <textarea id="gen-prompt" rows="3" placeholder="a small wooden shipping crate with metal corner brackets, single object, centered"></textarea>
         </label>
         <div class="grid2">
           <label class="field">
@@ -114,9 +133,71 @@
           </label>
         </div>
         <label class="check"><input type="checkbox" id="gen-dry" checked /> dry-run <span class="hint">不花钱、只校验请求体</span></label>
-        <button id="btn-generate" class="primary" type="submit">Generate</button>
+        <button id="btn-generate" class="primary" type="submit">生成模型</button>
       </form>
-      <pre id="job-log" class="job-log" aria-live="polite"></pre>
+      <p class="note">
+        生成成功后会自动进入「训练」：这份资产会写进 URDF 的 tool 碰撞位，然后交给引擎。
+        <br />A successful generation moves you to Train with this asset in the tool link.
+      </p>
+    </section>
+
+    <section class="tab-panel" data-panel="train" hidden>
+      <h2>Train <span class="hint">/ 采集与训练</span></h2>
+      <div class="engine" id="engine-box"><span class="dot"></span><span id="engine-text">engine —</span></div>
+      <form id="train-form" autocomplete="off">
+        <div class="grid2">
+          <label class="field">
+            <span>asset</span>
+            <input id="train-asset" readonly />
+          </label>
+          <label class="field">
+            <span>task</span>
+            <select id="train-task">
+              <option value="pick_place">pick_place</option>
+              <option value="stack">stack</option>
+              <option value="push">push</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>episodes</span>
+            <input id="train-episodes" type="number" min="1" max="16" value="2" />
+          </label>
+          <label class="field">
+            <span>seed</span>
+            <input id="train-seed" type="number" min="0" value="1000" />
+          </label>
+          <label class="field">
+            <span>verify</span>
+            <select id="train-verify">
+              <option value="full">full</option>
+              <option value="sample">sample</option>
+              <option value="off">off</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>camera</span>
+            <input value="--cam" readonly />
+          </label>
+        </div>
+        <div class="row">
+          <button id="btn-prepare" class="ghost" type="button">只准备</button>
+          <button id="btn-train" class="primary" type="submit">开始训练</button>
+        </div>
+      </form>
+      <div class="cmd" id="train-command-wrap" hidden>
+        <div class="cmd-head"><span>command</span><button class="ghost small" id="btn-copy-cmd" type="button">copy</button></div>
+        <pre id="train-command"></pre>
+      </div>
+      <p class="note" id="train-note">
+        引擎在独立 checkout 里编译运行；本页只负责把资产写进 URDF、传命令、读回执。
+        <br />The engine runs in its own checkout; this page prepares the URDF, passes the command and reads the receipts back.
+      </p>
+    </section>
+
+    <section class="tab-panel" data-panel="results" hidden>
+      <h2>Receipt <span class="hint">/ 回执与结果</span></h2>
+      <div id="runs" class="runs"><p class="empty">no runs yet</p></div>
+      <div id="result" class="result"></div>
     </section>
   </aside>
 
@@ -125,8 +206,8 @@
 <div id="offline" class="offline" hidden>
   <div class="offline-card">
     <h3>API server not running</h3>
-    <p>This page needs the local bridge (it serves the robot description, the artifacts and the Lux3D call).</p>
-    <pre>python bridge.py serve</pre>
+    <p>This app needs the local bridge (robot description, artifacts, Lux3D call, engine runner).</p>
+    <pre>python bridge.py serve --engine /path/to/OriEra</pre>
     <p class="muted">then open <code>http://127.0.0.1:8137/</code> · 页面需要本地服务，先跑上面这条命令。</p>
   </div>
 </div>

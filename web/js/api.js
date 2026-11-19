@@ -26,6 +26,22 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     }),
+  prepare: (payload) =>
+    request('/api/prepare', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  train: (payload) =>
+    request('/api/train', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  cancel: (jobId) =>
+    request(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }),
+  runs: () => request('/api/runs'),
+  run: (id) => request(`/api/runs/${encodeURIComponent(id)}`),
   job: (id) => request(`/api/jobs/${id}`),
   assetUrl: (name, kind) => `/api/asset/${encodeURIComponent(name)}?kind=${kind}`,
 };

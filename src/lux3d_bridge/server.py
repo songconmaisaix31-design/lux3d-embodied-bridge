@@ -20,6 +20,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import threading
 import time
 import uuid
@@ -27,7 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
-from . import aholo, asset, robot, verify
+from . import aholo, asset, bench, pipeline, robot, verify
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "web")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -231,6 +232,7 @@ class Job:
         self.id = uuid.uuid4().hex[:12]
         self.payload = payload
         self.config = config
+        self.kind = config.get("kind", "generate")
         self.state = "queued"          # queued | running | success | failed
         self.task_id: Optional[str] = None
         self.task_status: Any = None   # the Lux3D integer, verbatim
@@ -238,10 +240,14 @@ class Job:
         self.message = ""
         self.log: List[str] = []
         self.asset: Optional[Dict[str, Any]] = None
+        self.result: Optional[Dict[str, Any]] = None
+        self.run_id: Optional[str] = config.get("run_id")
+        self.command: List[str] = []
         self.payload_json: Optional[Dict[str, Any]] = None
         self.created_at = time.time()
         self.updated_at = self.created_at
         self.dry_run = bool(payload.get("dry_run"))
+        self.process: Any = None       # subprocess handle, for cancel
 
     def touch(self) -> None:
         self.updated_at = time.time()
@@ -249,16 +255,20 @@ class Job:
     def to_json(self) -> Dict[str, Any]:
         return {
             "id": self.id,
+            "kind": self.kind,
             "state": self.state,
             "dry_run": self.dry_run,
             "task_id": self.task_id,
             "task_status": self.task_status,
             "status_name": self.status_name,
             "message": self.message,
-            "log": self.log[-40:],
+            "log": self.log[-60:],
             "payload": self.payload,
             "payload_json": self.payload_json,
             "asset": self.asset,
+            "result": self.result,
+            "run_id": self.run_id,
+            "command": self.command,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -361,6 +371,101 @@ class JobRunner(threading.Thread):
         raise aholo.AholoError(f"task {task_id} produced no artifact within {config['max_wait']}s")
 
 
+class TrainingRunner(threading.Thread):
+    """Runs the engine's ``embodied_sim_collect`` against a prepared run dir.
+
+    The engine is a separate checkout; it writes its own artifacts. This runner
+    only streams its stdout into the job log and reads the artifacts back
+    through :mod:`lux3d_bridge.pipeline` when the process exits.
+    """
+
+    def __init__(self, job: Job, root: str) -> None:
+        super().__init__(daemon=True)
+        self.job = job
+        self.root = root
+
+    def run(self) -> None:
+        job = self.job
+        config = job.config
+        engine = config["engine"]
+        command = config["command"]
+        job.state = "running"
+        job.command = command
+        started = time.time()
+        try:
+            job.log.append("$ " + bench.render(command))
+            job.log.append(f"$ cd {engine}")
+            job.touch()
+            process = subprocess.Popen(
+                command,
+                cwd=engine,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+                env={**os.environ, "CARGO_TERM_COLOR": "never"},
+            )
+            job.process = process
+            assert process.stdout is not None
+            for raw in process.stdout:
+                line = raw.rstrip("\r\n")
+                if line.strip():
+                    job.log.append(line)
+                    if len(job.log) > 400:
+                        del job.log[: len(job.log) - 400]
+                    job.touch()
+            code = process.wait()
+        except OSError as exc:
+            job.state = "failed"
+            job.message = f"cannot start the engine: {exc}"
+            self._finalize(started, 1)
+            return
+        except Exception as exc:  # noqa: BLE001 - a runner thread must never die silently
+            job.state = "failed"
+            job.message = f"{type(exc).__name__}: {exc}"
+            job.log.append(job.message)
+            return
+        finally:
+            job.process = None
+
+        try:
+            record = self._finalize(started, code)
+        except Exception as exc:  # noqa: BLE001 - reading artifacts must not hang the job
+            job.state = "failed"
+            job.message = f"cannot read the run artifacts back: {exc}"
+            return
+        if code == 0:
+            job.state = "success"
+            summary = (record or {}).get("result") or {}
+            job.message = (
+                f"{summary.get('successes')}/{summary.get('episodes')} episodes · "
+                f"{summary.get('protocol') or 'protocol'} · spec {(summary.get('spec_hash') or '?')[:12]}"
+            )
+        else:
+            job.state = "failed"
+            job.message = f"engine exited {code}; last line: {self._last_line()}"
+
+    def _last_line(self) -> str:
+        for line in reversed(self.job.log):
+            stripped = line.strip()
+            if stripped and not stripped.startswith("$"):
+                return stripped[:200]
+        return "(no output)"
+
+    def _finalize(self, started: float, code: int) -> Optional[Dict[str, Any]]:
+        job = self.job
+        try:
+            record = pipeline.finalize_run(self.root, job.run_id, exit_code=code, elapsed_s=time.time() - started)
+        except (OSError, ValueError) as exc:
+            job.log.append(f"cannot read the run artifacts back: {exc}")
+            return None
+        job.result = record
+        job.touch()
+        return record
+
+
 class Jobs:
     def __init__(self, root: str) -> None:
         self.root = root
@@ -369,11 +474,24 @@ class Jobs:
 
     def submit(self, payload: Dict[str, Any], config: Dict[str, Any]) -> Job:
         job = Job(payload, config)
-        runner = JobRunner(job, self.root)
+        runner: threading.Thread
+        if job.kind == "train":
+            runner = TrainingRunner(job, self.root)
+        else:
+            runner = JobRunner(job, self.root)
         with self._lock:
             self._jobs[job.id] = job
         runner.start()
         return job
+
+    def cancel(self, job_id: str) -> bool:
+        job = self.get(job_id)
+        process = getattr(job, "process", None) if job else None
+        if process is None:
+            return False
+        process.terminate()
+        job.log.append("cancel requested · 已请求终止")
+        return True
 
     def get(self, job_id: str) -> Optional[Job]:
         with self._lock:
@@ -401,6 +519,7 @@ class App:
         base_url: Optional[str] = None,
         create_path: Optional[str] = None,
         poll_path: Optional[str] = None,
+        engine: Optional[str] = None,
     ) -> None:
         aholo.load_env_file(os.path.join(root, ".env"))
         self.root = root
@@ -413,10 +532,22 @@ class App:
         self.base_url = base_url
         self.create_path = create_path
         self.poll_path = poll_path
+        self.engine = engine or os.environ.get("ORIERA_ENGINE") or ""
         self.catalog = Catalog(root, self.asset_dirs)
         self.jobs = Jobs(root)
 
     # -- config / robot ----------------------------------------------------
+
+    def engine_status(self) -> Dict[str, Any]:
+        path = self.engine
+        ok = bool(path) and os.path.isdir(os.path.join(path, "crates"))
+        return {
+            "path": path or None,
+            "ok": ok,
+            "reason": None
+            if ok
+            else ("no engine path: pass --engine or set ORIERA_ENGINE" if not path else f"{path} has no crates/ directory"),
+        }
 
     def config(self) -> Dict[str, Any]:
         conf = aholo.PROFILES[self.profile]
@@ -433,6 +564,10 @@ class App:
             "urdf": self.urdf_path,
             "asset_dirs": self.asset_dirs,
             "gen_dir": GEN_DIR,
+            "engine": self.engine_status(),
+            "task_default": pipeline.DEFAULT_TASK,
+            "tasks": ["pick_place", "stack", "push"],
+            "runs_dir": pipeline.RUNS_DIRNAME.replace(os.sep, "/"),
         }
 
     def robot_model(self, requested: Optional[str]) -> Dict[str, Any]:
@@ -466,6 +601,115 @@ class App:
         if path is None:
             raise ApiError(f"asset {name!r} has no {kind.upper()} on disk", 404)
         return path, CONTENT_TYPES.get(os.path.splitext(path)[1].lower(), "application/octet-stream")
+
+    # -- training ----------------------------------------------------------
+
+    def prepare(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Materialize one run dir (mesh + injected URDF) without running anything."""
+        name = (body.get("asset") or "").strip()
+        record = self.catalog.find(name)
+        if record is None:
+            raise ApiError(f"no asset named {name!r}", 404)
+        if not record.get("has_stl"):
+            raise ApiError(f"asset {name!r} has no STL; ingest it first", 409)
+        task = body.get("task") or pipeline.DEFAULT_TASK
+        episodes = int(body.get("episodes") or 2)
+        seed = int(body.get("seed") or 1000)
+        try:
+            prepared = pipeline.prepare_run(
+                self.root,
+                record,
+                self.catalog.path_for(record, "stl") or "",
+                task=task,
+                episodes=episodes,
+                seed=seed,
+                engine=self.engine or None,
+            )
+        except (OSError, ValueError) as exc:
+            raise ApiError(f"cannot prepare the run: {exc}", 500) from exc
+        return {
+            "ok": True,
+            "run": prepared["record"],
+            "dir": os.path.relpath(prepared["dir"], self.root).replace(os.sep, "/"),
+            "engine": self.engine_status(),
+        }
+
+    def train(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        status = self.engine_status()
+        if not status["ok"]:
+            raise ApiError(
+                f"no engine checkout configured ({status['reason']}). "
+                "Run `python bridge.py serve --engine /path/to/OriEra`, or start it with ORIERA_ENGINE set.",
+                409,
+            )
+        name = (body.get("asset") or "").strip()
+        record = self.catalog.find(name)
+        if record is None:
+            raise ApiError(f"no asset named {name!r}", 404)
+        if not record.get("has_stl"):
+            raise ApiError(f"asset {name!r} has no STL; ingest it first", 409)
+        task = body.get("task") or pipeline.DEFAULT_TASK
+        if task not in ("pick_place", "stack", "push"):
+            raise ApiError("task must be pick_place, stack or push")
+        episodes = int(body.get("episodes") or 2)
+        if not 1 <= episodes <= 16:
+            raise ApiError("episodes must be inside 1..16")
+        seed = int(body.get("seed") or 1000)
+        verify = body.get("verify") or "full"
+        if verify not in ("full", "sample", "off"):
+            raise ApiError("verify must be full, sample or off")
+
+        prepared = pipeline.prepare_run(
+            self.root,
+            record,
+            self.catalog.path_for(record, "stl") or "",
+            task=task,
+            episodes=episodes,
+            seed=seed,
+            engine=self.engine,
+        )
+        run_dir = prepared["dir"]
+        paths = bench.paths_for(run_dir, "desk_arm")
+        command = bench.build_command(
+            engine_dir=self.engine,
+            urdf_robot=paths["urdf_robot"],
+            mesh_base=paths["mesh_base"],
+            mesh_package="generated",
+            dump_robot_spec=paths["dump_robot_spec"],
+            episodes=episodes,
+            fingerprints=paths["fingerprints"],
+            verify_determinism=verify,
+            extra=["--task", task, "--seed", str(seed), "--out", run_dir, "--cam"],
+        )
+        pipeline.write_json(os.path.join(run_dir, "run.json"), {**prepared["record"], "command": command, "command_line": bench.render(command)})
+
+        job = self.jobs.submit(
+            body,
+            {
+                "kind": "train",
+                "engine": self.engine,
+                "command": command,
+                "run_id": prepared["id"],
+                "run_dir": run_dir,
+            },
+        )
+        job.run_id = prepared["id"]
+        return {"ok": True, "job": job.to_json(), "run_id": prepared["id"]}
+
+    def runs(self) -> Dict[str, Any]:
+        return {"ok": True, "runs": pipeline.list_runs(self.root), "engine": self.engine_status()}
+
+    def run(self, run_id: str) -> Dict[str, Any]:
+        record = pipeline.load_run(self.root, run_id)
+        if record is None:
+            raise ApiError("no such run", 404)
+        return {"ok": True, "run": record}
+
+    def frame(self, run_id: str, track: str, episode: str, name: str) -> Tuple[str, str]:
+        path = pipeline.frame_path(self.root, run_id, track, episode, name)
+        if path is None:
+            raise ApiError("no such frame", 404)
+        return path, "image/png"
 
     # -- generation --------------------------------------------------------
 
@@ -578,6 +822,17 @@ class Handler(BaseHTTPRequestHandler):
                 if job is None:
                     raise ApiError("no such job", 404)
                 return self._json({"ok": True, "job": job.to_json()})
+            if path == "/api/runs":
+                return self._json(self.app.runs())
+            if path.startswith("/api/runs/"):
+                parts = path[len("/api/runs/"):].split("/")
+                if len(parts) == 1:
+                    return self._json(self.app.run(parts[0]))
+                if len(parts) == 5 and parts[1] == "frame":
+                    file_path, content_type = self.app.frame(parts[0], parts[2], parts[3], parts[4])
+                    with open(file_path, "rb") as handle:
+                        return self._send(200, handle.read(), content_type)
+                raise ApiError(f"no route {path}", 404)
             return self._static(path)
         except ApiError as exc:
             return self._error(str(exc), exc.status)
@@ -593,20 +848,34 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             if parsed.path == "/api/generate":
-                length = int(self.headers.get("Content-Length") or 0)
-                if length > MAX_BODY:
-                    raise ApiError("request body too large", 413)
-                raw = self.rfile.read(length) if length else b"{}"
-                try:
-                    body = json.loads(raw or b"{}")
-                except json.JSONDecodeError as exc:
-                    raise ApiError(f"body is not JSON: {exc}") from exc
-                if not isinstance(body, dict):
-                    raise ApiError("body must be a JSON object")
-                return self._json(self.app.generate(body), 202)
+                return self._json(self.app.generate(self._body()), 202)
+            if parsed.path == "/api/prepare":
+                return self._json(self.app.prepare(self._body()))
+            if parsed.path == "/api/train":
+                return self._json(self.app.train(self._body()), 202)
+            if parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/cancel"):
+                job_id = parsed.path[len("/api/jobs/"): -len("/cancel")]
+                if not self.app.jobs.cancel(job_id):
+                    raise ApiError("no running process for this job", 409)
+                return self._json({"ok": True, "cancelled": job_id})
             raise ApiError(f"no POST route {parsed.path}", 404)
         except ApiError as exc:
             return self._error(str(exc), exc.status)
+        except (OSError, ValueError) as exc:
+            return self._error(f"{type(exc).__name__}: {exc}", 500)
+
+    def _body(self) -> Dict[str, Any]:
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > MAX_BODY:
+            raise ApiError("request body too large", 413)
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            body = json.loads(raw or b"{}")
+        except json.JSONDecodeError as exc:
+            raise ApiError(f"body is not JSON: {exc}") from exc
+        if not isinstance(body, dict):
+            raise ApiError("body must be a JSON object")
+        return body
 
     # -- static files ------------------------------------------------------
 
@@ -634,6 +903,8 @@ def serve(app: App, host: str = "127.0.0.1", port: int = 8137) -> None:
     print(f"lux3d bridge viewer  http://{host}:{server.server_address[1]}/")
     print(f"  assets   {', '.join(app.asset_dirs)}")
     print(f"  gateway  {app.config()['gateway']}  key {'present' if app.key else 'missing'}")
+    status = app.engine_status()
+    print(f"  engine   {status['path'] or '(not set — Train is disabled)'}{'' if status['ok'] or not status['path'] else ' (no crates/)'}")
     print("  Ctrl-C to stop")
     try:
         server.serve_forever()

@@ -1,5 +1,9 @@
-// Wires the page: robot from the URDF, asset from the lock manifest, the
-// receipt from the last bench run, and the Lux3D call behind the Generate button.
+// The application wiring: text -> model -> train -> receipt, all on one page.
+//
+// Nothing on this page is a mock: the asset bytes come from Lux3D through the
+// bridge, the arm comes from the URDF, the training run is the engine's own
+// `embodied_sim_collect`, and every number in the result panel is read from the
+// files that run left behind.
 
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -10,9 +14,9 @@ import { parseStl } from './stl.js';
 
 const $ = (id) => document.getElementById(id);
 const fmt = (value, digits = 3) => (typeof value === 'number' ? value.toFixed(digits) : '—');
+const pct = (value) => (typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : '—');
 const short = (value, head = 8) => (value ? `${String(value).slice(0, head)}…` : '—');
 
-// Surface a broken module instead of leaving a blank canvas.
 window.addEventListener('error', (event) => {
   const host = document.getElementById('job-log');
   if (host) host.textContent += `✖ ${event.message} (${event.filename}:${event.lineno})\n`;
@@ -30,29 +34,27 @@ const state = {
   assets: [],
   receipts: [],
   pairs: [],
+  runs: [],
   selected: null,
   assetRoot: null,
   stlRoot: null,
   bboxHelper: null,
-  jobTimer: null,
-  jobId: null,
-  logLines: 0,
+  tab: 'generate',
+  job: null,          // { id, kind, timer, started }
+  activeRunId: null,
   playing: null,
 };
 
 const loader = new GLTFLoader();
 const glbCache = new Map();
-
-// Exposed for the headless checks (tools/smoke-viewer.mjs) and for anyone
-// debugging from the devtools console.
-window.__viewer = state;
+window.__app = state;
 
 // ── boot ──────────────────────────────────────────────────────────────────
 
 async function boot() {
   try {
     state.config = await api.config();
-  } catch (error) {
+  } catch {
     $('offline').hidden = false;
     $('server-dot').className = 'dot bad';
     return;
@@ -61,13 +63,13 @@ async function boot() {
   $('chip-key').textContent = state.config.has_key ? 'key ok' : 'key missing';
   $('chip-key').className = `chip ${state.config.has_key ? 'ok' : 'warn'}`;
   $('urdf-source').textContent = state.config.urdf;
+  renderEngine();
 
   state.stage = createStage($('view'));
-
   try {
     state.model = await api.robot(state.config.urdf);
   } catch (error) {
-    $('robot-note').textContent = `URDF failed: ${error.message}`;
+    appendLog(`✖ URDF: ${error.message}`);
     return;
   }
   state.arm = buildArm(state.model);
@@ -77,21 +79,59 @@ async function boot() {
   buildJointControls();
   updateTcp();
 
-  fillGenerateForm();
+  fillForms();
+  wireTabs();
   await refreshData();
+  await refreshRuns();
   await selectAsset(state.selected);
+  setTab('generate');
 }
 
-async function refreshData() {
-  const data = await api.assets();
-  state.assets = data.assets || [];
-  state.receipts = data.receipts || [];
-  state.pairs = data.pairs || [];
-  renderAssetList();
-  $('chip-assets').textContent = `assets ${state.assets.length}`;
-  $('chip-assets').className = `chip ${state.assets.length ? 'ok' : ''}`;
-  const loadable = state.assets.filter((asset) => asset.has_glb || asset.has_stl);
-  state.selected = loadable[0] || state.assets[0] || null;
+function renderEngine() {
+  const engine = state.config.engine || {};
+  $('engine-box').innerHTML = `<span class="dot ${engine.ok ? 'ok' : 'bad'}"></span><span id="engine-text">${
+    engine.ok ? `engine · ${engine.path}` : `engine missing · ${engine.reason || 'not configured'}`
+  }</span>`;
+  $('chip-engine').textContent = engine.ok ? 'engine ok' : 'engine —';
+  $('chip-engine').className = `chip ${engine.ok ? 'ok' : 'warn'}`;
+  $('btn-train').disabled = !engine.ok;
+  $('btn-train').title = engine.ok ? '' : 'start the bridge with --engine /path/to/OriEra';
+  $('btn-prepare').disabled = !state.selected;
+}
+
+// ── tabs / flow ───────────────────────────────────────────────────────────
+
+function wireTabs() {
+  for (const step of document.querySelectorAll('#flow .step')) {
+    step.addEventListener('click', () => {
+      if (step.dataset.step === 'train' && !state.selected) return;
+      setTab(step.dataset.step);
+    });
+  }
+}
+
+function setTab(name) {
+  state.tab = name;
+  for (const step of document.querySelectorAll('#flow .step')) {
+    step.classList.toggle('active', step.dataset.step === name);
+  }
+  for (const panel of document.querySelectorAll('.tab-panel')) {
+    panel.hidden = panel.dataset.panel !== name;
+  }
+  if (name === 'train') {
+    $('train-asset').value = state.selected ? state.selected.name : '';
+  }
+}
+
+function markSteps() {
+  const done = {
+    generate: state.assets.length > 0,
+    train: state.runs.length > 0,
+    results: Boolean(state.activeRunId),
+  };
+  for (const step of document.querySelectorAll('#flow .step')) {
+    step.classList.toggle('done', Boolean(done[step.dataset.step]));
+  }
 }
 
 // ── robot ─────────────────────────────────────────────────────────────────
@@ -116,13 +156,13 @@ function buildJointControls() {
       updateTcp();
     });
   }
-  $('btn-home').addEventListener('click', () => resetJoints());
+  $('btn-home').addEventListener('click', resetJoints);
   $('btn-play').addEventListener('click', togglePlay);
 }
 
 function resetJoints() {
   if (state.playing) togglePlay();
-  for (const [name, joint] of state.arm.joints) {
+  for (const [name] of state.arm.joints) {
     state.arm.setJoint(name, 0);
     const input = $(`joint-${name}`);
     if (input) input.value = '0';
@@ -144,10 +184,8 @@ function togglePlay() {
   const names = [...state.arm.joints.keys()];
   const step = () => {
     const t = (performance.now() - start) / 1000;
-    const q1 = Math.sin(t * 1.25) * 0.55;
-    const q2 = -0.55 + Math.cos(t * 0.9) * 0.45;
-    state.arm.setJoint(names[0], q1);
-    if (names[1]) state.arm.setJoint(names[1], q2);
+    state.arm.setJoint(names[0], Math.sin(t * 1.25) * 0.55);
+    if (names[1]) state.arm.setJoint(names[1], -0.55 + Math.cos(t * 0.9) * 0.45);
     for (const name of names) {
       const input = $(`joint-${name}`);
       if (input) input.value = String(state.arm.joints.get(name).value);
@@ -163,25 +201,37 @@ function togglePlay() {
 function updateTcp() {
   const position = state.arm.worldPosition(state.arm.toolLink);
   if (!position) return;
-  // scene is Y-up; URDF is Z-up (x, y, z) = (x, -z, y) in world space.
   const [x, y, z] = [position.x, -position.z, position.y];
   $('stage-tcp').textContent = `TCP ${x.toFixed(3)} ${y.toFixed(3)} ${z.toFixed(3)} m`;
 }
 
 // ── assets ────────────────────────────────────────────────────────────────
 
+async function refreshData() {
+  const data = await api.assets();
+  state.assets = data.assets || [];
+  state.receipts = data.receipts || [];
+  state.pairs = data.pairs || [];
+  renderAssetList();
+  $('chip-assets').textContent = `assets ${state.assets.length}`;
+  $('chip-assets').className = `chip ${state.assets.length ? 'ok' : ''}`;
+  if (!state.selected) state.selected = state.assets.find((a) => a.has_glb || a.has_stl) || null;
+  markSteps();
+  renderEngine();
+}
+
 function renderAssetList() {
   const host = $('asset-list');
   host.innerHTML = '';
   if (!state.assets.length) {
-    host.innerHTML = '<p class="empty">还没有资产。点右侧 Generate，或先跑 <code>python bridge.py demo</code>。</p>';
+    host.innerHTML = '<p class="empty">还没有资产。用「生成」或 <code>python bridge.py demo</code>。</p>';
     return;
   }
   for (const entry of state.assets) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `asset${state.selected && state.selected.name === entry.name ? ' active' : ''}`;
-    const size = entry.bbox_m?.size ? entry.bbox_m.size.map((value) => value.toFixed(2)).join(' × ') : '—';
+    const size = entry.bbox_m?.size ? entry.bbox_m.size.map((v) => v.toFixed(2)).join(' × ') : '—';
     const missing = entry.has_glb ? '' : ' <span class="bad">glb missing</span>';
     button.innerHTML = `
       <div class="name">${entry.name}${missing}</div>
@@ -196,15 +246,15 @@ function renderAssetList() {
 async function selectAsset(entry) {
   if (!entry) {
     renderIdentity(null);
-    renderReceipt(null);
     return;
   }
   state.selected = entry;
   renderAssetList();
   renderIdentity(entry);
-  renderReceipt(entry);
   $('stage-asset').textContent = `${entry.name} · ${entry.asset_id}`;
   $('stage-asset').className = 'tag accent';
+  $('train-asset').value = entry.name;
+  $('btn-prepare').disabled = false;
 
   disposeGroup(state.assetRoot);
   disposeGroup(state.stlRoot);
@@ -221,10 +271,10 @@ async function selectAsset(entry) {
       placeInFront(state.assetRoot);
       state.stage.scene.add(state.assetRoot);
       applyWireframe();
-      appendLog(`glb ok · ${entry.name} · ${countTriangles(state.assetRoot)} tris on screen`);
+      appendLog(`glb · ${entry.name} · ${countTriangles(state.assetRoot)} tris on screen`);
       frameScene();
     } catch (error) {
-      appendLog(`✖ GLB failed: ${error.message}`);
+      appendLog(`✖ GLB: ${error.message}`);
     }
   }
   if (entry.has_stl) {
@@ -232,29 +282,12 @@ async function selectAsset(entry) {
       state.stlRoot = await loadCollision(entry);
       placeInFront(state.stlRoot, state.assetRoot);
       state.stage.scene.add(state.stlRoot);
-      appendLog(`stl ok · collision shell · ${(entry.stl_bytes / 1024).toFixed(0)} KiB`);
     } catch (error) {
-      appendLog(`✖ STL failed: ${error.message}`);
+      appendLog(`✖ STL: ${error.message}`);
     }
   }
   applyToggles();
-}
-
-function countTriangles(root) {
-  let total = 0;
-  root.traverse((node) => {
-    if (!node.isMesh || !node.geometry) return;
-    const geometry = node.geometry;
-    total += geometry.index ? geometry.index.count / 3 : geometry.attributes.position.count / 3;
-  });
-  return Math.round(total);
-}
-
-function frameScene() {
-  const box = new THREE.Box3();
-  box.expandByObject(state.arm.root);
-  if (state.assetRoot) box.expandByObject(state.assetRoot);
-  state.stage.frameOn(box, 1.5);
+  markSteps();
 }
 
 async function loadGlb(entry) {
@@ -266,9 +299,7 @@ async function loadGlb(entry) {
     if (!node.isMesh) return;
     node.castShadow = true;
     node.receiveShadow = true;
-    const material = node.material;
-    if (material?.map) material.map.colorSpace = THREE.SRGBColorSpace;
-    if (material) material.envMapIntensity = 0.8;
+    if (node.material?.map) node.material.map.colorSpace = THREE.SRGBColorSpace;
   });
   return root;
 }
@@ -282,17 +313,10 @@ async function loadCollision(entry) {
   const mesh = new THREE.Mesh(
     geometry,
     new THREE.MeshStandardMaterial({
-      color: 0xff7a3d,
-      transparent: true,
-      opacity: 0.1,
-      roughness: 0.5,
-      metalness: 0,
-      depthWrite: false,
-      side: THREE.DoubleSide,
+      color: 0xff7a3d, transparent: true, opacity: 0.1, roughness: 0.5,
+      metalness: 0, depthWrite: false, side: THREE.DoubleSide,
     })
   );
-  // Only the sharp edges: a full wireframe over ~15k triangles is noise, and the
-  // point is "this is the hull the bench collides with", not a mesh dump.
   const edges = new THREE.LineSegments(
     new THREE.EdgesGeometry(geometry, 28),
     new THREE.LineBasicMaterial({ color: 0xff9a68, transparent: true, opacity: 0.55, depthTest: false })
@@ -303,20 +327,32 @@ async function loadCollision(entry) {
   return group;
 }
 
-// Place the object on the table in front of the arm, keeping metres as metres.
 function placeInFront(group, reference) {
   const box = new THREE.Box3().setFromObject(reference || group);
   if (box.isEmpty()) return;
-  const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
   const target = new THREE.Vector3(-0.46, 0, 0.26);
   group.position.x += target.x - center.x;
   group.position.z += target.z - center.z;
   group.position.y += -box.min.y;
-  if (reference && reference !== group) {
-    group.position.copy(reference.position);
-  }
-  return size;
+  if (reference && reference !== group) group.position.copy(reference.position);
+}
+
+function countTriangles(root) {
+  let total = 0;
+  root.traverse((node) => {
+    if (!node.isMesh || !node.geometry) return;
+    const g = node.geometry;
+    total += g.index ? g.index.count / 3 : g.attributes.position.count / 3;
+  });
+  return Math.round(total);
+}
+
+function frameScene() {
+  const box = new THREE.Box3();
+  box.expandByObject(state.arm.root);
+  if (state.assetRoot) box.expandByObject(state.assetRoot);
+  state.stage.frameOn(box, 1.5);
 }
 
 function renderIdentity(entry) {
@@ -329,46 +365,13 @@ function renderIdentity(entry) {
   const rows = [
     ['asset_id', entry.asset_id || '—'],
     ['triangles', entry.triangles ?? '—'],
-    ['bbox m', size.length ? size.map((value) => fmt(value, 3)).join(' × ') : '—'],
-    ['source', entry.source_file || '—'],
+    ['bbox m', size.length ? size.map((v) => fmt(v, 3)).join(' × ') : '—'],
     ['sha256', short(entry.source_sha256, 10)],
-    ['stl sha256', short(entry.stl_sha256, 10)],
-    ['glb', entry.has_glb ? `${(entry.glb_bytes / 1024).toFixed(0)} KiB` : 'missing'],
     ['stl', entry.has_stl ? `${(entry.stl_bytes / 1024).toFixed(0)} KiB` : 'missing'],
-    ['manifest', entry.manifest],
   ];
   host.innerHTML = rows
-    .map(([key, value]) => `<div class="line"><span class="k">${key}</span><span class="v">${value}</span></div>`)
+    .map(([k, v]) => `<div class="line"><span class="k">${k}</span><span class="v">${v}</span></div>`)
     .join('');
-}
-
-function renderReceipt(entry) {
-  const host = $('receipt');
-  if (!state.receipts.length) {
-    host.innerHTML = '<p class="empty">no receipt yet — run <code>python bridge.py bench --run</code>.</p>';
-    return;
-  }
-  const receipt =
-    state.receipts.find((item) => entry && item.file.startsWith(`${entry.dir}/`)) || state.receipts[0];
-  const pair = state.pairs.find((item) => item.left === receipt.file || item.right === receipt.file);
-  const rows = [
-    ['file', receipt.file],
-    ['scheme', receipt.scheme || '—'],
-    ['spec_hash', receipt.spec_hash || '—'],
-    ['protocol', receipt.protocol_id || '—'],
-    ['episodes', receipt.episodes ?? '—'],
-    ['transitions', receipt.transitions ?? '—'],
-    ['successes', `${receipt.successes ?? '—'} (${((receipt.success_rate ?? 0) * 100).toFixed(1)}%)`],
-    ['engine', receipt.engine_commit || '—'],
-  ];
-  const verdict = pair
-    ? `<div class="verdict ${pair.match ? 'pass' : 'fail'}">${pair.match ? '✔ MATCH' : '✖ DIVERGENCE'} · ${pair.left.split('/').pop()} vs ${pair.right.split('/').pop()}${
-        pair.match ? '' : `<br />${pair.first_difference}`
-      }</div>`
-    : '<div class="verdict">single receipt · 无第二份可对拍</div>';
-  host.innerHTML =
-    rows.map(([key, value]) => `<div class="line"><span class="k">${key}</span><span class="v">${value}</span></div>`).join('') +
-    verdict;
 }
 
 // ── view toggles ──────────────────────────────────────────────────────────
@@ -388,16 +391,13 @@ function applyToggles() {
 
 function applyWireframe() {
   const wire = $('toggle-wire').checked;
-  const walk = (root) => {
-    if (!root) return;
-    root.traverse((node) => {
-      if (!node.isMesh || !node.material) return;
-      for (const material of Array.isArray(node.material) ? node.material : [node.material]) {
-        if ('wireframe' in material) material.wireframe = wire;
-      }
-    });
-  };
-  walk(state.assetRoot);
+  if (!state.assetRoot) return;
+  state.assetRoot.traverse((node) => {
+    if (!node.isMesh || !node.material) return;
+    for (const material of Array.isArray(node.material) ? node.material : [node.material]) {
+      if ('wireframe' in material) material.wireframe = wire;
+    }
+  });
 }
 
 function disposeGroup(group) {
@@ -408,9 +408,9 @@ function disposeGroup(group) {
   });
 }
 
-// ── generate ──────────────────────────────────────────────────────────────
+// ── generation ────────────────────────────────────────────────────────────
 
-function fillGenerateForm() {
+function fillForms() {
   const style = $('gen-style');
   for (const value of state.config.styles || []) {
     const option = document.createElement('option');
@@ -418,17 +418,31 @@ function fillGenerateForm() {
     option.textContent = value;
     style.appendChild(option);
   }
-  $('gen-faces').value = '20000';
   $('gen-dry').checked = !state.config.has_key;
-  $('gen-form').addEventListener('submit', submitGenerate);
   if (!state.config.has_key) {
-    $('job-log').textContent = 'no API key: dry-run only (the request body is printed, nothing is sent)';
+    appendLog('no API key: dry-run only (the request body is printed, nothing is sent)');
+  }
+  $('gen-form').addEventListener('submit', submitGenerate);
+  $('train-form').addEventListener('submit', submitTrain);
+  $('btn-prepare').addEventListener('click', prepareOnly);
+  $('btn-cancel').addEventListener('click', cancelJob);
+  $('btn-clear-log').addEventListener('click', () => { $('job-log').textContent = ''; });
+  $('btn-copy-cmd').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText($('train-command').textContent);
+      appendLog('command copied · 命令已复制');
+    } catch {
+      appendLog('clipboard blocked by the browser');
+    }
+  });
+  for (const id of ['toggle-collision', 'toggle-bbox', 'toggle-wire', 'toggle-spin']) {
+    $(id).addEventListener('change', applyToggles);
   }
 }
 
 async function submitGenerate(event) {
   event.preventDefault();
-  if (state.jobId) return;
+  if (state.job) return;
   const payload = {
     prompt: $('gen-prompt').value.trim(),
     version: $('gen-version').value,
@@ -438,67 +452,255 @@ async function submitGenerate(event) {
     dry_run: $('gen-dry').checked,
     mode: 'text-to-3d',
   };
-  const button = $('btn-generate');
-  button.disabled = true;
-  state.logLines = 0;
-  $('job-log').textContent = '';
+  $('btn-generate').disabled = true;
   try {
     const response = await api.generate(payload);
-    state.jobId = response.job.id;
-    appendLog(`job ${state.jobId} · ${response.job.state}${payload.dry_run ? ' · dry-run' : ''}`);
-    pollJob();
+    startJob(response.job, 'generate');
   } catch (error) {
     appendLog(`✖ ${error.message}`);
-    button.disabled = false;
+    $('btn-generate').disabled = false;
   }
+}
+
+// ── training ──────────────────────────────────────────────────────────────
+
+async function prepareOnly() {
+  if (!state.selected) return;
+  try {
+    const response = await api.prepare({
+      asset: state.selected.name,
+      task: $('train-task').value,
+      episodes: Number($('train-episodes').value),
+      seed: Number($('train-seed').value),
+    });
+    showCommand(response.run);
+    appendLog(`prepared ${response.dir} · mesh + URDF written`);
+  } catch (error) {
+    appendLog(`✖ prepare: ${error.message}`);
+  }
+}
+
+async function submitTrain(event) {
+  event.preventDefault();
+  if (state.job) return;
+  if (!state.selected) {
+    appendLog('✖ pick an asset first');
+    return;
+  }
+  $('btn-train').disabled = true;
+  try {
+    const response = await api.train({
+      asset: state.selected.name,
+      task: $('train-task').value,
+      episodes: Number($('train-episodes').value),
+      seed: Number($('train-seed').value),
+      verify: $('train-verify').value,
+    });
+    startJob(response.job, 'train');
+    appendLog(`training run ${response.run_id} started · 引擎编译/运行中`);
+    setTab('train');
+  } catch (error) {
+    appendLog(`✖ train: ${error.message}`);
+    $('btn-train').disabled = false;
+  }
+}
+
+function showCommand(record) {
+  if (!record || !record.command_line) return;
+  $('train-command-wrap').hidden = false;
+  $('train-command').textContent = record.command_line;
+}
+
+async function cancelJob() {
+  if (!state.job) return;
+  try {
+    await api.cancel(state.job.id);
+    appendLog('cancel requested · 已请求终止');
+  } catch (error) {
+    appendLog(`✖ cancel: ${error.message}`);
+  }
+}
+
+// ── job polling (shared by generate and train) ────────────────────────────
+
+function startJob(job, kind) {
+  const elapsed = Math.max(0, Date.now() / 1000 - (job.created_at || Date.now() / 1000));
+  state.job = { id: job.id, kind, timer: null, startedAt: Date.now() - elapsed * 1000 };
+  if (kind === 'train') {
+    $('run-progress').hidden = false;
+    $('run-state').textContent = 'queued';
+    $('run-elapsed').textContent = '0s';
+    $('stage-run').hidden = false;
+    $('stage-run').textContent = `run ${job.run_id || ''}`;
+  }
+  appendLog(`job ${job.id} · ${kind} · ${job.state}`);
+  pollJob();
 }
 
 async function pollJob() {
-  if (!state.jobId) return;
+  if (!state.job) return;
   let job;
   try {
-    const response = await api.job(state.jobId);
-    job = response.job;
+    job = (await api.job(state.job.id)).job;
   } catch (error) {
     appendLog(`✖ ${error.message}`);
     finishJob();
     return;
   }
-  for (const line of (job.log || []).slice(state.logLines)) appendLog(`· ${line}`);
-  state.logLines = (job.log || []).length;
+  if (Array.isArray(job.log)) $('job-log').textContent = job.log.join('\n');
+  if (state.job.kind === 'train') updateProgress(job);
+
   if (job.state === 'success' || job.state === 'failed') {
-    if (job.state === 'success') {
-      appendLog(job.dry_run ? '✔ dry-run ok — nothing was sent' : `✔ ${job.message}`);
-      await refreshData();
-      if (job.asset) {
-        const fresh = state.assets.find((item) => item.name === job.asset.name);
+    if (job.kind === 'generate' || job.payload?.prompt) {
+      // generation finished: refresh the list and move to Train
+      if (job.state === 'success' && job.asset) {
+        appendLog(`✔ generated ${job.asset.name} · ${job.asset.triangles} tris · asset ${job.asset.asset_id}`);
+        await refreshData();
+        const fresh = state.assets.find((a) => a.name === job.asset.name);
         if (fresh) await selectAsset(fresh);
+        setTab('train');
+      } else if (job.state === 'success') {
+        appendLog(`✔ ${job.message}`);
       }
-    } else {
-      appendLog(`✖ ${job.message}`);
     }
+    if (job.kind === 'train') {
+      if (job.state === 'success') {
+        appendLog(`✔ ${job.message}`);
+        await refreshRuns();
+        if (job.run_id) await openRun(job.run_id);
+        setTab('results');
+      } else {
+        appendLog(`✖ ${job.message}`);
+      }
+    }
+    if (job.state === 'failed') appendLog(`✖ ${job.message}`);
     finishJob();
     return;
   }
-  state.jobTimer = setTimeout(pollJob, 2000);
+  state.job.timer = setTimeout(pollJob, state.job.kind === 'train' ? 1500 : 2000);
+}
+
+function updateProgress(job) {
+  $('run-state').textContent = job.state === 'running' ? 'training' : job.state;
+  const seconds = Math.max(0, Math.round(Date.now() / 1000 - state.job.startedAt / 1000));
+  $('run-elapsed').textContent = `${seconds}s`;
+  const last = (job.log || []).filter((line) => line.trim() && !line.startsWith('$')).slice(-1)[0] || '';
+  $('run-lastline').textContent = last.slice(0, 160);
 }
 
 function finishJob() {
-  state.jobId = null;
-  state.jobTimer = null;
+  if (state.job?.timer) clearTimeout(state.job.timer);
+  state.job = null;
   $('btn-generate').disabled = false;
+  $('btn-train').disabled = !state.config?.engine?.ok;
+  $('run-progress').hidden = true;
+  $('stage-run').hidden = true;
 }
+
+// ── runs / results ────────────────────────────────────────────────────────
+
+async function refreshRuns() {
+  const data = await api.runs();
+  state.runs = data.runs || [];
+  renderRuns();
+  markSteps();
+}
+
+function renderRuns() {
+  const host = $('runs');
+  if (!state.runs.length) {
+    host.innerHTML = '<p class="empty">还没有训练记录。到「训练」页跑一次。</p>';
+    return;
+  }
+  host.innerHTML = '';
+  for (const run of state.runs) {
+    const result = run.result || {};
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `run${state.activeRunId === run.id ? ' active' : ''}`;
+    const verdict = run.status === 'done'
+      ? `<span class="rres ok">${result.successes ?? '?'}/${result.episodes ?? '?'}</span>`
+      : `<span class="rres ${run.status === 'failed' ? 'bad' : ''}">${run.status}</span>`;
+    button.innerHTML = `<span class="rid">${run.id}</span>${verdict}`;
+    button.addEventListener('click', () => openRun(run.id));
+    host.appendChild(button);
+  }
+}
+
+async function openRun(runId) {
+  try {
+    const data = await api.run(runId);
+    state.activeRunId = runId;
+    renderRuns();
+    renderResult(data.run);
+    markSteps();
+  } catch (error) {
+    appendLog(`✖ run ${runId}: ${error.message}`);
+  }
+}
+
+function renderResult(run) {
+  const host = $('result');
+  const result = run.result || {};
+  const receipt = run.receipt || {};
+  const rate = typeof result.success_rate === 'number' ? result.success_rate : null;
+  const wilson = result.wilson95 ? `Wilson95 [${pct(result.wilson95[0])}, ${pct(result.wilson95[1])}]` : '';
+
+  const frames = (run.frames || []).slice(0, 1).map((track) => {
+    const match = /^(.+)\/(episode_\d+)\/frame_(\d+)\.png$/.exec(track.first || '');
+    if (!match) return '';
+    const total = track.frames_per_episode || 0;
+    const picks = [...new Set([0, Math.floor(total / 2), Math.max(0, total - 1)])];
+    const images = picks
+      .map((index) => {
+        const name = `frame_${String(index).padStart(6, '0')}.png`;
+        const url = `/api/runs/${encodeURIComponent(run.id)}/frame/${match[1]}/${match[2]}/${name}`;
+        return `<img src="${url}" alt="camera frame ${index}" loading="lazy" />`;
+      })
+      .join('');
+    return `<div class="frames">${images}<div class="cap">${track.track} · ${track.episodes} episode(s) · ${total} frames each</div></div>`;
+  }).join('');
+
+  const rows = (result.runs || [])
+    .map(
+      (ep, index) => `<tr>
+        <td>${index}</td>
+        <td>${ep.seed ?? '—'}</td>
+        <td class="${ep.success ? 'ok' : 'bad'}">${ep.success ? '✓' : '✗'}</td>
+        <td>${ep.steps ?? '—'}</td>
+        <td>${typeof ep.reward_sum === 'number' ? ep.reward_sum.toFixed(2) : '—'}</td>
+        <td>${ep.failure_phase || ''}</td>
+      </tr>`
+    )
+    .join('');
+
+  host.innerHTML = `
+    <div class="banner">
+      <span class="big ${rate === null ? '' : rate > 0 ? 'ok' : 'bad'}">${rate === null ? '—' : pct(rate)}</span>
+      <span class="sub">${result.successes ?? '?'}/${result.episodes ?? '?'} episodes · ${result.protocol || receipt.protocol || '—'}</span>
+    </div>
+    <div class="bar"><span style="width:${rate === null ? 0 : Math.max(2, rate * 100)}%"></span></div>
+    <div class="kv">
+      <div class="line"><span class="k">spec_hash</span><span class="v">${result.spec_hash || receipt.spec_hash || '—'}</span></div>
+      <div class="line"><span class="k">wilson</span><span class="v">${wilson || '—'}</span></div>
+      <div class="line"><span class="k">gate</span><span class="v">${result.gate || '—'}</span></div>
+      <div class="line"><span class="k">verify</span><span class="v">${result.verify_determinism || '—'}</span></div>
+      <div class="line"><span class="k">throughput</span><span class="v">${typeof result.throughput_steps_per_s === 'number' ? result.throughput_steps_per_s.toFixed(0) + ' steps/s' : '—'}</span></div>
+      <div class="line"><span class="k">transitions</span><span class="v">${receipt.transitions ?? result.transitions ?? '—'}</span></div>
+      <div class="line"><span class="k">mesh</span><span class="v">${run.mesh || '—'}</span></div>
+      <div class="line"><span class="k">run dir</span><span class="v">${run.id}</span></div>
+    </div>
+    ${rows ? `<table class="episodes"><thead><tr><th>#</th><th>seed</th><th>ok</th><th>steps</th><th>reward</th><th>phase</th></tr></thead><tbody>${rows}</tbody></table>` : ''}
+    ${frames}
+  `;
+}
+
+// ── log ───────────────────────────────────────────────────────────────────
 
 function appendLog(line) {
   const host = $('job-log');
   host.textContent += `${line}\n`;
   host.scrollTop = host.scrollHeight;
-}
-
-// ── start ─────────────────────────────────────────────────────────────────
-
-for (const id of ['toggle-collision', 'toggle-bbox', 'toggle-wire', 'toggle-spin']) {
-  $(id).addEventListener('change', applyToggles);
 }
 
 boot();

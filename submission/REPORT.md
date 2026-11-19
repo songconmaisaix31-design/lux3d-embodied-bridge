@@ -118,12 +118,16 @@
 
 已验证（本机实测）：
 
-- `python -m unittest discover -s tests -v` → **38 个用例通过**（GitHub Actions 在 Ubuntu 3.10 / 3.13
-  与 Windows 3.13 上各跑一遍，全绿；其中 21 条是 WebGL viewer 的 URDF 解析、API 路由、
-  dry-run job 与 HTTP 层测试）；
+- `python -m unittest discover -s tests -v` → **45 个用例通过**（GitHub Actions 在 Ubuntu 3.10 / 3.13
+  与 Windows 3.13 上各跑一遍，全绿；其中 21 条是应用页的 URDF 解析、API 路由、
+  dry-run job 与 HTTP 层测试，另有 7 条覆盖 run 准备、训练 job 生命周期与结果解析）；
 - `python bridge.py demo` → 写出 `crate.stl`、`desk_arm.urdf`、`assets.lock.json`；
-- `python bridge.py serve` → 浏览器里画出 URDF 机械臂 + Lux3D 的 GLB + 碰撞 STL；
-  页面上的 Generate 走真实 Lux3D（真跑过 `taskId 8396881`，7,290 面，`asset_id 55d204cf9851ca74`）；
+- `python bridge.py serve --engine <checkout>` → 浏览器里三步走完：生成（真 Lux3D，`taskId 8396881`，
+  7,290 面，`asset_id 55d204cf9851ca74`）→ 训练（资产写进 URDF 的 tool 碰撞位，引擎真跑）→ 回执；
+- **一次完整的训练跑**（run `20261119-061746-crate_web`）：`embodied_sim_collect --verify-determinism full --cam`，
+  2 集 · 1400 transitions · 0/2 成功（0.0%，Wilson [0.0%, 65.8%]）· `✓ 确定性复核（full）：双跑逐位一致` ·
+  spec_hash `b84b3add08d4a9c3` · 45 steps/s · 数据集与相机帧落盘。Windows 上用
+  `x86_64-pc-windows-gnu` + MinGW-w64 GCC 构建（引擎编译 2m55s，跑 31s）；
 - 注入后的 URDF 能回读解析（写坏在写入时失败，不留给仿真）。
 
 复现步骤：

@@ -223,6 +223,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         base_url=args.base_url,
         create_path=args.create_path,
         poll_path=args.poll_path,
+        engine=args.engine or os.environ.get("ORIERA_ENGINE"),
     )
     if args.print_config:
         print(json.dumps(app.config(), indent=2, ensure_ascii=False))
@@ -336,6 +337,8 @@ def build_parser() -> argparse.ArgumentParser:
     srv.add_argument("--create-path", default=None)
     srv.add_argument("--poll-path", default=None)
     srv.add_argument("--print-config", action="store_true", help="print the served config and exit")
+    srv.add_argument("--engine", default=None,
+                     help="path to an OriEra checkout; enables the Train step (or set ORIERA_ENGINE)")
     srv.set_defaults(func=cmd_serve)
 
     rb = sub.add_parser("robot", help="parse a URDF and describe what the viewer draws")

@@ -227,8 +227,9 @@ class HttpTests(unittest.TestCase):
     def test_static_index_is_served(self):
         with urllib.request.urlopen(self.url("/"), timeout=10) as response:
             html = response.read().decode("utf-8")
-        self.assertIn("WebGL viewer", html)
+        self.assertIn("LUX3D", html)
         self.assertIn("importmap", html)
+        self.assertIn("data-panel=\"train\"", html)
 
     def test_unknown_route_is_json_404(self):
         with self.assertRaises(urllib.error.HTTPError) as caught:
