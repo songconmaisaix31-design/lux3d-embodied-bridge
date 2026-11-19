@@ -23,7 +23,7 @@ C:\Users\DW\Doubao\chats\2026-11-19\new-chat\lux3d-embodied-bridge
 
 | 依赖 | 本机路径 | 说明 |
 |---|---|---|
-| 引擎 checkout | `C:\Users\DW\repos\3D-engine` | OriEra 0.13.0（= `OriEra-engine/engine@49d8592` 的完整副本，本机 HEAD `615cab4` 只是 README 提交）。**不可复制进本仓库**，用 `--engine` 指过去 |
+| 引擎 checkout | `C:\Users\DW\repos\lux3D-engine` | 使用 lux3D-engine 的 `feat/workbench-rigid-contacts` 分支，通过 `--engine` 指定此目录 |
 | MinGW-w64 GCC | `C:\Users\DW\winlibs\mingw64\bin` | 本机没有 MSVC 链接器，用 gnu 工具链 + 这份 gcc（见 §4） |
 
 **仓库体积**：不含 `.git` 约 63 MB，其中 `out/` 占 57.7 MB（生成的 GLB/STL/数据集，**不进 git**）；
@@ -43,7 +43,7 @@ python -m unittest discover -s tests        # 45 条
 # 2) 起应用（本机 gnu 工具链 + 引擎）
 $env:Path = "C:\Users\DW\winlibs\mingw64\bin;$env:USERPROFILE\.cargo\bin;$env:Path"
 $env:RUSTUP_TOOLCHAIN = "stable-x86_64-pc-windows-gnu"
-python bridge.py serve --engine C:\Users\DW\repos\3D-engine
+python bridge.py serve --engine C:\Users\DW\repos\lux3D-engine
 #    → http://127.0.0.1:8137/
 ```
 
@@ -131,7 +131,7 @@ python bridge.py serve --engine C:\Users\DW\repos\3D-engine
 | Node | 24.16.0 | 只在手工跑 `node --test` 时用到，不是运行依赖 |
 | Rust | 1.100.0，工具链 `stable-x86_64-pc-windows-gnu` | 引擎要求 ≥ 1.87 |
 | GCC | MinGW-w64 16.2.0（winlibs，msvcrt）`C:\Users\DW\winlibs\mingw64\bin` | 没有 MSVC，见下 |
-| 引擎 | `C:\Users\DW\repos\3D-engine`（OriEra 0.13.0） | 首次编译约 2m55s |
+| 引擎 | `C:\Users\DW\repos\lux3D-engine` | 使用 `feat/workbench-rigid-contacts` 分支 |
 | 浏览器 | Edge 157（含 SwiftShader，可无头截图） | 只影响截图，不影响功能 |
 
 **为什么用 gnu 而不是 msvc**：这台机器没有 Visual Studio / MSVC 链接器，`cargo` 默认 msvc 工具链
@@ -201,7 +201,7 @@ out/
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | `linker link.exe not found` | 用了 msvc 工具链 | 设 `RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu`，PATH 加 `C:\Users\DW\winlibs\mingw64\bin` |
-| 页面显示「engine missing」 | serve 没带 `--engine`，也没设 `ORIERA_ENGINE` | `python bridge.py serve --engine C:\Users\DW\repos\3D-engine` |
+| 页面显示「engine missing」 | serve 没带 `--engine`，也没设 `ORIERA_ENGINE` | `python bridge.py serve --engine C:\Users\DW\repos\lux3D-engine` |
 | 「开始训练」点了没反应/409 | 同上，或资产没有 STL | 先看 `/api/config` 的 `engine.ok` |
 | 生成返回 409 `no AHOLO_API_KEY` | `.env` 没 key 且没勾 dry-run | 把 key 写进 `.env`（**不要提交**），或勾 dry-run |
 | 生成 401 | 用了 `Authorization: Bearer <key>` | 必须裸 key（`docs/AHOLO-API.md` §2） |
