@@ -4,7 +4,7 @@
 
 ## 启动
 
-使用 [lux3D-engine 接触约束分支](https://github.com/songconmaisaix31-design/3D-engine/tree/feat/workbench-rigid-contacts)，在引擎目录中编译采集程序和 Python 扩展。Windows 的 GNU 工具链需要在 PATH 中加入 MinGW-w64 和 Cargo，并设置 `RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu`。让 PyO3 使用运行服务的 Python，例如在 PowerShell 中设置 `$env:PYO3_PYTHON = (Get-Command python.exe).Source`。
+使用 [lux3D-engine 接触约束分支](https://github.com/songconmaisaix31-design/lux3D-engine/tree/feat/workbench-rigid-contacts)，在引擎目录中编译采集程序和 Python 扩展。Windows 的 GNU 工具链需要在 PATH 中加入 MinGW-w64 和 Cargo，并设置 `RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu`。让 PyO3 使用运行服务的 Python，例如在 PowerShell 中设置 `$env:PYO3_PYTHON = (Get-Command python.exe).Source`。
 
 ```powershell
 cargo build --release --locked -p oriera-agent --features python,urdf --lib --example embodied_sim_collect
@@ -14,7 +14,7 @@ cargo build --release --locked -p oriera-agent --features python,urdf --lib --ex
 
 ```powershell
 python -m pip install torch
-python bridge.py serve --engine C:\path\to\3D-engine
+python bridge.py serve --engine C:\path\to\lux3D-engine
 ```
 
 ## 运行过程
