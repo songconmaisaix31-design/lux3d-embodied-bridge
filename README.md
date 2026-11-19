@@ -1,5 +1,7 @@
 # lux3d-embodied-bridge
 
+[![tests](https://github.com/songconmaisaix31-design/lux3d-embodied-bridge/actions/workflows/tests.yml/badge.svg)](https://github.com/songconmaisaix31-design/lux3d-embodied-bridge/actions/workflows/tests.yml)
+
 **Aholo Lux3D 生成的资产，第一次带上可复核的回执。**
 Turn an Aholo Lux3D artifact into a deterministic embodied experiment: `GLB → STL → URDF collision mesh → per-episode fingerprint`.
 
@@ -13,7 +15,7 @@ This repository contains **no code copied from any engine**. It is a bridge: it 
 |---|---|
 | **Problem<br>问题** | A 3D generation model can hand you a beautiful mesh, and a simulator can hand you a reproducible episode. Nothing in between pins one to the other: the asset is regenerated, the collision geometry changes, and the receipt no longer means anything.<br>3D 生成模型能给你一个好看的网格，仿真器能给你一集可复现的实验。中间那层没人做：资产重新生成一次，碰撞几何就变了，回执也就不再指向任何东西。 |
 | **Fix<br>做法** | Hash what Lux3D returned, convert it to the one mesh format the bench actually parses, stamp the asset id into the URDF that the bench consumes, then read the per-episode fingerprints back.<br>把 Lux3D 返回的字节做哈希，转成仿真台真正会解析的网格格式，把资产 id 写进仿真台真正读取的那份 URDF，再把每集指纹读回来。 |
-| **Cost<br>代价** | Python 3.9+ standard library only. No pip install, no GPU, no engine fork.<br>只要 Python 3.9+ 标准库；不用装包、不用 GPU、不 fork 引擎。 |
+| **Cost<br>代价** | Python 3.10+ standard library only. No pip install, no GPU, no engine fork.<br>只要 Python 3.10+ 标准库；不用装包、不用 GPU、不 fork 引擎。 |
 | **Not<br>不是** | Not a renderer, not a physics engine, not a Lux3D client SDK for every endpoint. It is the accounting layer between a generator and a bench.<br>不是渲染器，不是物理引擎，也不是覆盖全部接口的 Lux3D SDK。它就是生成器和仿真台之间的记账层。 |
 
 ## The chain · 这条链

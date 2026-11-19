@@ -1,0 +1,37 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: "3.10"
+          - os: ubuntu-latest
+            python: "3.13"
+          - os: windows-latest
+            python: "3.13"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: unit tests (stdlib unittest)
+        run: python -m unittest discover -s tests -v
+
+      - name: offline demo writes its artifacts
+        run: python bridge.py demo
+
+      - name: the injected URDF re-parses
+        run: python -c "import xml.etree.ElementTree as ET; ET.parse('out/demo/urdf/desk_arm.urdf'); print('urdf parses')"
+
+      - name: the same asset always gets the same id
+        run: python -c "import sys,tempfile; sys.path.insert(0,'src'); from lux3d_bridge import asset; d=tempfile.mkdtemp(); a=asset.ingest('fixtures/cube.glb','crate',d)['asset_id']; b=asset.ingest('fixtures/cube.glb','crate',d)['asset_id']; print(a,b); assert a==b"
