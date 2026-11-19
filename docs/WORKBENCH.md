@@ -2,20 +2,46 @@
 
 工作台用 Lux3D 生成 GLB，用 lux3D-engine 训练和评估桌面四轴机械臂。支持单件刚性块状物体和双指抓放。视口用原始 GLB 显示物体，物理引擎用尺寸相同的长方体计算碰撞。夹取宽度可在 45–60 毫米之间调整。
 
-## 启动
+## 从全新克隆启动
 
-使用 [lux3D-engine 接触约束分支](https://github.com/songconmaisaix31-design/lux3D-engine/tree/feat/workbench-rigid-contacts)，在引擎目录中编译采集程序和 Python 扩展。Windows 的 GNU 工具链需要在 PATH 中加入 MinGW-w64 和 Cargo，并设置 `RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu`。让 PyO3 使用运行服务的 Python，例如在 PowerShell 中设置 `$env:PYO3_PYTHON = (Get-Command python.exe).Source`。
-
-```powershell
-cargo build --release --locked -p oriera-agent --features python,urdf --lib --example embodied_sim_collect
-```
-
-工作台使用引擎目录 `examples/15-embodied-sim/vendor/oriera-contact/` 随附的浏览器仿真模块。Node.js 负责用同一模块执行独立评估。在本仓库配置 `.env` 的 `AHOLO_API_KEY`，安装 PyTorch 并启动服务。浏览器打开 [机械臂工作台](http://127.0.0.1:8137/)。
+以下命令使用 Windows PowerShell。准备 Git、64 位 Python 3.13、Node.js、Rustup 和 MinGW-w64 GCC。在一个存放项目的目录中运行以下命令，将示例中的 MinGW-w64 路径换成你的安装路径。
 
 ```powershell
+git -c core.autocrlf=false clone --branch main https://github.com/songconmaisaix31-design/lux3D-engine.git
+git clone --branch main https://github.com/songconmaisaix31-design/lux3d-embodied-bridge.git
+
+$env:Path = "C:\Users\DW\winlibs\mingw64\bin;$env:USERPROFILE\.cargo\bin;$env:Path"
+$env:RUSTUP_TOOLCHAIN = 'stable-x86_64-pc-windows-gnu'
+rustup toolchain install stable-x86_64-pc-windows-gnu
 python -m pip install torch
-python bridge.py serve --engine C:\path\to\lux3D-engine
+$env:PYO3_PYTHON = (Get-Command python.exe).Source
+
+Set-Location lux3D-engine
+cargo generate-lockfile
+cargo build --release --locked -p oriera-agent --features python,urdf --lib --example embodied_sim_collect
+$engineDir = (Get-Location).Path
+Set-Location ../lux3d-embodied-bridge
 ```
+
+首次克隆需要生成本地 `Cargo.lock`。工作台用同一个 Python 运行 PyTorch 和引擎扩展。Node.js 使用引擎仓库随附的 `examples/15-embodied-sim/vendor/oriera-contact/` 执行独立评估，浏览器也用这份 WebAssembly 回放。
+
+## 用麻将训练和回放
+
+准备一个麻将 GLB。复跑已验收的资产时，使用 Lux3D 任务 `8421303` 下载的 `majiang.glb`，导入后应显示资产 ID `1b9952482e825bda`。将下面的源文件路径替换为你的文件位置。
+
+```powershell
+New-Item -ItemType Directory -Force out/live | Out-Null
+Copy-Item -LiteralPath 'C:\path\to\majiang.glb' -Destination out/live/majiang.glb
+python bridge.py ingest out/live/majiang.glb --name majiang --out out/live --lux3d
+python bridge.py serve --engine $engineDir
+```
+
+已有 GLB 可以直接训练。要在页面中生成新模型，在工作台根目录的 `.env` 设置 `AHOLO_API_KEY`，再从「生成」提交一块单独的麻将牌。
+
+1. 打开 [机械臂工作台](http://127.0.0.1:8137/)，确认状态栏显示「lux3D-engine · 就绪」。如端口已被占用，在启动命令中添加 `--port 8150` 并访问对应端口。
+2. 从左侧选择 `majiang`，在「场景」中选择「侧放」，宽度设为 50 毫米，点击「准备场景」。
+3. 在「训练」中点击「开始训练」，等待示范采集、策略训练和独立评估完成。
+4. 在「回放」里确认至少 9/12 集抓放成功、12/12 集无穿透。选中一集，等视口显示「已核对轨迹」后点击「播放」。
 
 ## 运行过程
 

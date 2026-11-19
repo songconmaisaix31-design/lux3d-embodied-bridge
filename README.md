@@ -11,6 +11,10 @@ This repository contains **no code copied from any engine**. It is a bridge: it 
 
 ---
 
+## 机械臂工作台启动
+
+克隆本仓库和 [lux3D-engine](https://github.com/songconmaisaix31-design/lux3D-engine) 的 `main`，编译引擎并安装 PyTorch、Node.js。准备一个麻将 GLB，即可在本地完成机械臂训练、独立评估和回放。完整命令及麻将场景参数见[从全新克隆启动](docs/WORKBENCH.md#从全新克隆启动)。
+
 ## At a glance · 一眼看懂
 
 | | |
@@ -66,7 +70,7 @@ This bridge is the missing seam. It does not try to be a better generator or a b
 
 群核 Aholo 全球 3D AI 黑客松里，"群核技术栈应用"占 30%，且要求 Lux3D 承担核心 3D 内容。只展示一个生成的网格，没什么可核验；只在笔记本上报一串数字，又证明不了数字来自**那一个**网格。这个桥做的就是中间那道缝。
 
-## Quickstart · 快速开始
+## URDF CLI Quickstart · URDF 命令行快速开始
 
 Offline, no API key, no engine: the bundled fixture stands in for a Lux3D output.
 

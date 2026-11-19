@@ -1,7 +1,7 @@
 # 交接文档 · lux3d-embodied-bridge
 
 > 写给下一个接手的人：这个项目在哪、现在能跑到什么程度、哪些地方会咬人、下一步该动哪里。
-> 最后更新：2026-11-19 · 本文件随 `98f19f4` 提交（内容覆盖到 `169a140` 为止的代码状态）· 全部结论都在本机实测过。
+> 最后更新：2026-11-19。机械臂工作台的启动步骤见 [WORKBENCH.md](docs/WORKBENCH.md)，本文件的架构和故障记录主要对应 `/index.html` 的 URDF 末端碰撞实验。
 
 ---
 
@@ -23,7 +23,7 @@ C:\Users\DW\Doubao\chats\2026-11-19\new-chat\lux3d-embodied-bridge
 
 | 依赖 | 本机路径 | 说明 |
 |---|---|---|
-| 引擎 checkout | `C:\Users\DW\repos\lux3D-engine` | 使用 lux3D-engine 的 `feat/workbench-rigid-contacts` 分支，通过 `--engine` 指定此目录 |
+| 引擎 checkout | `C:\Users\DW\repos\lux3D-engine` | 使用 lux3D-engine 的 `main` 分支，通过 `--engine` 指定此目录 |
 | MinGW-w64 GCC | `C:\Users\DW\winlibs\mingw64\bin` | 本机没有 MSVC 链接器，用 gnu 工具链 + 这份 gcc（见 §4） |
 
 **仓库体积**：不含 `.git` 约 63 MB，其中 `out/` 占 57.7 MB（生成的 GLB/STL/数据集，**不进 git**）；
@@ -33,26 +33,9 @@ C:\Users\DW\Doubao\chats\2026-11-19\new-chat\lux3d-embodied-bridge
 
 ## 1. 五分钟接手
 
-```powershell
-cd C:\Users\DW\Doubao\chats\2026-11-19\new-chat\lux3d-embodied-bridge
+从 [工作台启动说明](docs/WORKBENCH.md#从全新克隆启动) 编译 `main` 上的引擎、导入麻将并启动服务。根路径 `/` 打开机械臂抓放工作台，复跑标准见[麻将训练和回放](docs/WORKBENCH.md#用麻将训练和回放)。
 
-# 1) 离线自检：不花钱、不需要引擎
-python bridge.py demo
-python -m unittest discover -s tests        # 45 条
-
-# 2) 起应用（本机 gnu 工具链 + 引擎）
-$env:Path = "C:\Users\DW\winlibs\mingw64\bin;$env:USERPROFILE\.cargo\bin;$env:Path"
-$env:RUSTUP_TOOLCHAIN = "stable-x86_64-pc-windows-gnu"
-python bridge.py serve --engine C:\Users\DW\repos\lux3D-engine
-#    → http://127.0.0.1:8137/
-```
-
-打开页面后应该看到：左边三张资产卡（`crate_live` / `crate` / `crate_web`）、中间 URDF 解析出来的
-2 自由度桌面臂 + 生成的木箱、右边「生成 / 训练 / 回执」三个页签。
-如果 `out/` 是空的（新克隆），左栏会是空的——先跑 `python bridge.py demo` 或到页面里生成一次。
-
-**验证环境是否真的通**：点「训练」→「开始训练」。日志里应出现
-`✓ 确定性复核（full）：双跑逐位一致`，30 秒左右结束，成功率大概率是 **0%**——这是对的，见 §6。
+`/index.html` 打开 URDF 末端碰撞实验。可先运行 `python bridge.py demo` 生成该实验的方块样例。自动测试命令为 `python -m unittest discover -s tests`。
 
 ---
 
@@ -128,10 +111,10 @@ python bridge.py serve --engine C:\Users\DW\repos\lux3D-engine
 | 东西 | 版本 / 路径 | 备注 |
 |---|---|---|
 | Python | 3.13.18 | 只用标准库，无 pip 依赖 |
-| Node | 24.16.0 | 只在手工跑 `node --test` 时用到，不是运行依赖 |
+| Node | 24.16.0 | 机械臂工作台的独立评估依赖 Node.js |
 | Rust | 1.100.0，工具链 `stable-x86_64-pc-windows-gnu` | 引擎要求 ≥ 1.87 |
 | GCC | MinGW-w64 16.2.0（winlibs，msvcrt）`C:\Users\DW\winlibs\mingw64\bin` | 没有 MSVC，见下 |
-| 引擎 | `C:\Users\DW\repos\lux3D-engine` | 使用 `feat/workbench-rigid-contacts` 分支 |
+| 引擎 | `C:\Users\DW\repos\lux3D-engine` | 使用 `main` 分支 |
 | 浏览器 | Edge 157（含 SwiftShader，可无头截图） | 只影响截图，不影响功能 |
 
 **为什么用 gnu 而不是 msvc**：这台机器没有 Visual Studio / MSVC 链接器，`cargo` 默认 msvc 工具链
