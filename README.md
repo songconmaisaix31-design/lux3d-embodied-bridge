@@ -70,9 +70,13 @@ python -m unittest discover -s tests -v
 ## With a real Lux3D artifact · 用真实的 Lux3D 产物
 
 ```bash
-# 1. generate (needs AHOLO_API_KEY; --dry-run prints the request without sending it)
-python bridge.py generate --mode text-to-3d --prompt "a 12 cm ribbed wooden crate" \
-    --name crate --profile labs
+cp .env.example .env          # then put your key in .env (it is gitignored)
+
+# 1. generate: real Lux3D task, poll, download, ingest in one shot
+python bridge.py generate --mode text-to-3d \
+    --prompt "a small wooden shipping crate with metal corner brackets" \
+    --version G1-Turbo --style photorealistic --face-count 30000 \
+    --name crate --profile global
 
 # 2. or ingest something you already downloaded from the console
 python bridge.py ingest out/assets/crate.glb --name crate --lux3d
@@ -84,6 +88,9 @@ python bridge.py urdf fixtures/desk_arm.urdf --out out/demo/urdf/desk_arm.urdf \
 # 4. print (or run) the bench command
 python bridge.py bench --engine /path/to/OriEra --out out/demo --run
 ```
+
+`--profile global` = `https://api.aholo.ai`, `--profile cn` = `https://api.aholo.cn`.
+Auth is `Authorization: <key>` with **no** `Bearer` prefix.
 
 ## Commands · 命令
 
@@ -98,14 +105,15 @@ python bridge.py bench --engine /path/to/OriEra --out out/demo --run
 
 ## What is actually verified · 现在真正验证过什么
 
-- `python -m unittest discover -s tests` → **9 tests pass** (`GLB` parsing, deterministic asset ids, STL round-trip, URDF injection, command shaping, receipt diff).
+- `python -m unittest discover -s tests` → **14 tests pass** (`GLB` parsing, deterministic asset ids, STL round-trip, URDF injection, command shaping, receipt diff, Lux3D wire contract).
 - `python bridge.py demo` → produces `out/demo/meshes/crate.stl`, `out/demo/urdf/desk_arm.urdf`, `out/demo/meshes/assets.lock.json` on a clean checkout.
 - The generated URDF parses back clean (the injector re-parses its own output; a malformed description fails at write time, not at simulation time).
+- **A real Lux3D task ran end to end on 2026-11-19**: `text-to-3d`, `G1-Turbo`, `faceCount=30000` → `taskId=8389570`, `status=3` after ~2 min, one `tex_mesh.glb` (9.7 MB) → **21,874 triangles, bbox 0.600 × 0.511 × 0.535 m, asset_id `474c2fd22f0d3f9f`** → injected into `package://generated/crate_lux3d.stl`. Details in [`docs/AHOLO-LUX3D.md`](docs/AHOLO-LUX3D.md).
 
 ## Honest limits · 边界，写出来不藏着
 
 - **GLB is not the bench's native format.** The upstream bench probes GLB but parses STL into a convex hull. This bridge therefore converts; a GLB handed straight to the bench degrades to a link-segment envelope. That is why the STL step exists, not as a convenience.
-- **The Lux3D request shape is overridable, not guessed.** Two documented surfaces disagree on field names, so `--profile`, `--base-url`, `--create-path`, `--poll-path` and `--payload-json` all exist. Confirm against your console before a long run.
+- **The Lux3D wire format is pinned to the real gateway, and still overridable.** Base URL, create path, poll path and payload are verified (`api.aholo.ai`, `/global/lux3d/v1/...`, integer statuses `0/1/3/4/6`, download URL in `outputs[n].content` with a ~2 h TTL). `--base-url`, `--create-path`, `--poll-path` and `--payload-json` remain, so a gateway change is a flag, not a rewrite.
 - **Convex hulls are conservative.** A crate with a hollow interior collides as its hull. Contact behaviour is stable, geometry is not exact.
 - **No Y-up / Z-up conversion is invented here.** Positions are passed through as the file declares them; a rotated asset shows up rotated. The bench has `--urdf-mount-rpy` for installation orientation, and this bridge does not silently apply it for you.
 - **Units are trusted as metres**, because glTF and URDF both say metres. A Lux3D export in centimetres will look 100× too big; `assets.lock.json` prints the bounding box so this is visible immediately.
@@ -133,7 +141,7 @@ lux3d-embodied-bridge/
 
 ## Status · 状态
 
-Verified on Windows 11, Python 3.13.18 (stdlib only): 9 tests pass, the offline demo writes its three artifacts, and the injected URDF re-parses. The `cargo run` line is shaped from the engine's documented CLI; it has **not** been executed here because this machine has no Rust toolchain — run it once before relying on it.
+Verified on Windows 11, Python 3.13.18 (stdlib only): 14 tests pass, the offline demo writes its three artifacts, the injected URDF re-parses, and one real Lux3D generation was carried through to an injected STL. The `cargo run` line is shaped from the engine's documented CLI; it has **not** been executed here because this machine has no Rust toolchain — run it once before relying on it.
 
 ## License · 许可
 

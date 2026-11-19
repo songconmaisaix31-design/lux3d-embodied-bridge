@@ -10,7 +10,7 @@ import unittest
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
 
-from lux3d_bridge import asset, bench, glb, stl, urdf, verify  # noqa: E402
+from lux3d_bridge import aholo, asset, bench, glb, stl, urdf, verify  # noqa: E402
 
 FIXTURES = os.path.join(REPO_ROOT, "fixtures")
 
@@ -131,6 +131,50 @@ class VerifyTests(unittest.TestCase):
             same, where = verify._first_divergence(left, right)
             self.assertFalse(same)
             self.assertIn("episodes[0].seed", where)
+
+
+class AholoClientTests(unittest.TestCase):
+    """The wire contract, checked without touching the network."""
+
+    def test_envelope_is_unwrapped(self):
+        self.assertEqual(aholo.unwrap({"c": "0", "m": "ok", "d": 8389873}), 8389873)
+        self.assertEqual(aholo.unwrap({"c": "0", "d": {"taskId": 7}}), {"taskId": 7})
+
+    def test_business_error_is_raised_not_ignored(self):
+        with self.assertRaises(aholo.AholoError):
+            aholo.unwrap({"c": "10400", "m": "faceCount out of range"})
+        with self.assertRaises(aholo.AholoError):
+            aholo.unwrap({"c": "0", "m": "empty"})
+
+    def test_integer_statuses(self):
+        self.assertEqual(aholo.status_name(0), "init")
+        self.assertEqual(aholo.status_name(1), "running")
+        self.assertEqual(aholo.status_name(3), "success")
+        self.assertEqual(aholo.status_name(4), "failed")
+        self.assertEqual(aholo.status_name(6), "canceled")
+        self.assertEqual(aholo.status_name(99), "status-99")
+
+    def test_outputs_and_format_preference(self):
+        task = {
+            "taskId": 1,
+            "status": 3,
+            "outputs": [
+                {"content": "https://cdn.example.com/a.zip"},
+                {"content": "https://cdn.example.com/b.glb"},
+            ],
+        }
+        urls = aholo.output_urls(task)
+        self.assertEqual(len(urls), 2)
+        self.assertEqual(aholo.pick_output(urls, ".glb"), "https://cdn.example.com/b.glb")
+        self.assertIsNone(aholo.output_urls({"status": 1, "outputs": []}) or None)
+
+    def test_dry_run_sends_nothing(self):
+        payload = aholo.default_payload("a crate", None, "G1-Turbo", 30000, "glb", True, "photorealistic")
+        self.assertEqual(payload["faceCount"], 30000)
+        self.assertEqual(payload["style"], "photorealistic")
+        self.assertEqual(payload["outputFormat"], ["glb"])
+        task_id = aholo.create_task("global", "", payload, "text-to-3d", dry_run=True)
+        self.assertEqual(task_id, "dry-run-task")
 
 
 if __name__ == "__main__":

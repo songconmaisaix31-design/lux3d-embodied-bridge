@@ -34,13 +34,19 @@ def _manifest_entry(manifest_path: str, name: str) -> Dict[str, Any]:
 
 
 def cmd_generate(args: argparse.Namespace) -> int:
-    key = args.key or os.environ.get("AHOLO_API_KEY") or os.environ.get("AHOLO_API_KEY_LABS")
+    aholo.load_env_file(os.path.join(REPO_ROOT, ".env"))
+    key = args.key or os.environ.get("AHOLO_API_KEY")
     if not key and not args.dry_run:
         raise SystemExit(
-            "missing API key: set AHOLO_API_KEY, or pass --key, or use --dry-run to print the request"
+            "missing API key: put AHOLO_API_KEY in .env, export it, pass --key, "
+            "or use --dry-run to print the request"
         )
+    image = args.image_url
+    if image and os.path.exists(image):
+        image = aholo.data_url(image)
     payload = aholo.default_payload(
-        args.prompt, args.image_url, args.version, args.face_count, args.format, not args.no_pbr
+        args.prompt, image, args.version, args.face_count, args.format,
+        not args.no_pbr, args.style,
     )
     if args.payload_json:
         with open(args.payload_json, "r", encoding="utf-8") as handle:
@@ -64,6 +70,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
         poll_path=args.poll_path,
         interval=args.interval,
         max_wait=args.max_wait,
+        wanted_ext=aholo.FORMAT_EXT.get(args.format, ".glb"),
     )
     path = aholo.download(url, args.out, args.name, overwrite=args.overwrite)
     if not args.no_ingest:
@@ -204,10 +211,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     gen = sub.add_parser("generate", help="create a Lux3D task, poll it, download and ingest")
     gen.add_argument("--prompt", default="", help="text prompt for text-to-3D")
-    gen.add_argument("--image-url", default=None, help="reference image URL for img-to-3D")
+    gen.add_argument("--image-url", default=None, help="reference image URL or local path for img-to-3D")
     gen.add_argument("--mode", choices=aholo.MODES, default="text-to-3d")
-    gen.add_argument("--profile", choices=sorted(aholo.PROFILES), default="labs")
-    gen.add_argument("--version", default="G1")
+    gen.add_argument("--profile", choices=sorted(aholo.PROFILES), default="global",
+                     help="global = api.aholo.ai, cn = api.aholo.cn")
+    gen.add_argument("--version", default="G1", choices=["G1", "G1-Turbo"])
+    gen.add_argument("--style", default=None, choices=list(aholo.STYLES),
+                     help="text-to-3D style; default is the service default (photorealistic)")
     gen.add_argument("--face-count", type=int, default=200000)
     gen.add_argument("--format", default="glb", choices=["glb", "zip", "ply"])
     gen.add_argument("--no-pbr", action="store_true")
