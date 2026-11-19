@@ -141,7 +141,7 @@ design file.
   状态机、下载有效期、轮询参数、可直接跑的 Python，以及每一步踩过的坑。
 - [`docs/PRODUCT.md`](docs/PRODUCT.md) — 产品目标：要缝的是什么、谁会用、明确不做什么、怎么算成了、路线图。
 - [`docs/BENCH-COMMAND.md`](docs/BENCH-COMMAND.md) — 把资产交给引擎的命令、参数与两个实测坑。
-- [`docs/URDF-IMPORT.md`](docs/URDF-IMPORT.md) — 注入规则与「base 朝向」的来历。
+- [`docs/AHOLO-LUX3D.md`](docs/AHOLO-LUX3D.md) — 两次真实生成的记录：参数、字节数、面数、资产 id。
 
 ## Honest limits · 边界，写出来不藏着
 
