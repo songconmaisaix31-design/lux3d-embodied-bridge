@@ -17,12 +17,13 @@ PRESET = Path("crates/oriera-embodied/specs/official/tabletop-4dof-pick.json")
 KERNEL = Path("examples/15-embodied-sim/vendor/oriera")
 CONTACT_KERNEL = KERNEL.with_name("oriera-contact")
 KERNEL_FILES = {"oriera_wasm.js", "oriera_wasm_bg.wasm"}
+DEFAULT_GRASP_WIDTH_MM = 50.0
 TURN = math.pi / 2
 ORIENTATIONS = {
     "upright": ((0, 1, 2), (0, 0, 0)),
     "horizontal": ((2, 1, 0), (0, TURN, 0)),
     "side": ((0, 2, 1), (TURN, 0, 0)),
-    "end": ((2, 0, 1), (0, TURN, TURN)),
+    "end": ((2, 0, 1), (TURN, TURN, 0)),
 }
 
 
@@ -48,6 +49,27 @@ def readiness(engine: str) -> dict:
     if importlib.util.find_spec("torch") is None:
         return {"ready": False, "reason": "服务所用的 Python 环境需要安装 PyTorch。"}
     return {"ready": True, "reason": None}
+
+
+def automatic_settings(entry: dict) -> tuple[float, str]:
+    size = entry["bbox_m"]["size"]
+    if not all(math.isfinite(n) and n > 0 for n in size):
+        raise ValueError("模型在三个轴上都需要有效的尺寸。")
+
+    shortest, longest = min(size), max(size)
+    candidates = []
+    for orientation, (axes, _) in ORIENTATIONS.items():
+        grasp_length = size[axes[2]]
+        minimum = max(45.0, 18.0 * grasp_length / shortest)
+        maximum = min(60.0, 82.0 * grasp_length / longest)
+        if minimum <= maximum:
+            width = min(max(DEFAULT_GRASP_WIDTH_MM, minimum), maximum)
+            height = width * size[axes[1]] / grasp_length
+            candidates.append((height, abs(width - DEFAULT_GRASP_WIDTH_MM), width, orientation))
+    if not candidates:
+        raise ValueError("模型的比例超出当前夹爪范围。请使用缩放后每个轴均在 18 至 82 毫米之间的块状物体。")
+    _, _, width, orientation = min(candidates, key=lambda candidate: candidate[:2])
+    return width, orientation
 
 
 def scene_for(preset: dict, entry: dict, width_mm: float, orientation: str) -> dict:
@@ -100,6 +122,7 @@ def scene_for(preset: dict, entry: dict, width_mm: float, orientation: str) -> d
     return {
         "spec": preset, "scale": scale, "pivot_m": pivot, "size_m": dims,
         "surface_m": surface, "asset_rotation": rotation, "kernel": "contact",
+        "width_mm": width_mm, "orientation": orientation,
     }
 
 

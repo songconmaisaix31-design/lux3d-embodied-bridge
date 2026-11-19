@@ -450,6 +450,7 @@ async function submitGenerate(event) {
     style: $('gen-style').value || null,
     name: $('gen-name').value.trim() || 'lux3d',
     dry_run: $('gen-dry').checked,
+    prepare_scene: false,
     mode: 'text-to-3d',
   };
   $('btn-generate').disabled = true;

@@ -66,6 +66,7 @@ const state = {
   selectedAssetId: null,
   assetToken: 0,        // guards async asset preview races
   sceneToken: 0,        // guards async scene preparation races
+  scenePending: false,
   run: null,            // currently prepared run (scene stage)
   sceneLoaded: false,   // renderer accepted run.scene
   activeSceneId: null,
@@ -217,23 +218,24 @@ function initNav() {
 function updateControls() {
   const busy = Boolean(state.job);
   const busyTrain = busy && state.job.kind === 'train';
+  const sceneLocked = busy || state.scenePending;
   const hasKey = Boolean(state.config && state.config.has_key);
   const asset = selectedAsset();
   const stageOk = Boolean(state.stage) && !state.stageError;
 
-  if (el.generateBtn) el.generateBtn.disabled = busy || !hasKey;
+  if (el.generateBtn) el.generateBtn.disabled = sceneLocked || !hasKey;
   if (el.prompt) el.prompt.disabled = busy && state.job.kind === 'generate';
   if (el.assetName) el.assetName.disabled = busy && state.job.kind === 'generate';
 
-  if (el.prepareBtn) el.prepareBtn.disabled = busy || !state.workbenchReady || !asset || !asset.has_glb || !stageOk;
-  if (el.widthMm) el.widthMm.disabled = busyTrain;
-  el.orientation.disabled = busyTrain;
+  if (el.prepareBtn) el.prepareBtn.disabled = sceneLocked || !state.workbenchReady || !asset || !asset.has_glb || !stageOk;
+  if (el.widthMm) el.widthMm.disabled = sceneLocked;
+  el.orientation.disabled = sceneLocked;
 
   const preflightOk = state.run?.status === 'prepared' && state.sceneLoaded;
-  if (el.trainBtn) el.trainBtn.disabled = busy || !state.workbenchReady || !preflightOk;
+  if (el.trainBtn) el.trainBtn.disabled = sceneLocked || !state.workbenchReady || !preflightOk;
   if (el.cancelBtn) el.cancelBtn.disabled = !busyTrain;
   el.collisionToggle.disabled = state.activeSceneId === null;
-  for (const button of el.assetList.querySelectorAll('button')) button.disabled = busyTrain;
+  for (const button of el.assetList.querySelectorAll('button')) button.disabled = sceneLocked;
 
   const r = state.replay;
   const replayOk = Boolean(r && r.steps > 0);
@@ -275,7 +277,7 @@ function selectedAsset() {
   return state.assets.find((a) => a.asset_id === state.selectedAssetId) || null;
 }
 
-async function loadAssets({ select } = {}) {
+async function loadAssets({ select, preview = true } = {}) {
   try {
     const data = await api('/api/assets');
     state.assets = Array.isArray(data.assets) ? data.assets : [];
@@ -287,7 +289,7 @@ async function loadAssets({ select } = {}) {
   if (select && state.assets.some((a) => a.asset_id === select)) {
     state.selectedAssetId = null; // force reselect
     renderAssets();
-    await selectAsset(select);
+    await selectAsset(select, { preview });
   } else {
     if (state.selectedAssetId && !selectedAsset()) state.selectedAssetId = null;
     renderAssets();
@@ -355,7 +357,7 @@ function renderAssetDetails() {
   box.append(dl);
 }
 
-async function selectAsset(assetId) {
+async function selectAsset(assetId, { preview = true } = {}) {
   if (assetId === state.selectedAssetId) return;
   stopPlayback();
   state.selectedAssetId = assetId || null;
@@ -368,6 +370,7 @@ async function selectAsset(assetId) {
   renderAssetDetails();
   setStatus(el.sceneStatus, '', 'info');
   updateControls();
+  if (!preview) return;
 
   const a = selectedAsset();
   if (!a) {
@@ -469,7 +472,7 @@ async function cancelJob() {
 
 async function onGenerate(e) {
   e.preventDefault();
-  if (state.job) return;
+  if (state.job || state.scenePending) return;
   const prompt = (el.prompt && el.prompt.value || '').trim();
   const name = (el.assetName?.value || '').trim() || `block-${Date.now().toString(36)}`;
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}$/.test(name)) {
@@ -488,7 +491,7 @@ async function onGenerate(e) {
   try {
     res = await api('/api/generate', {
       method: 'POST',
-      body: { prompt, name, version: 'G1-Turbo', face_count: 10000, format: 'glb', pbr: true },
+      body: { prompt, name, version: 'G1-Turbo', face_count: 10000, format: 'glb', pbr: true, prepare_scene: true },
     });
   } catch (err) {
     setStatus(el.generationStatus, `提交失败：${errText(err)}`, 'error');
@@ -502,24 +505,23 @@ async function onGenerate(e) {
     return;
   }
   setStatus(el.generationStatus, '已提交，等待生成…', 'info');
+  trackGeneration(id);
+}
+
+function trackGeneration(id) {
   startJob('generate', id, (j) => {
-    const label = { queued: '等待提交', init: '已发起生成', running: '正在生成', success: '正在载入模型' }[j.status_name] || '处理中';
+    const label = {
+      queued: '等待提交', init: '已发起生成', running: '正在生成', success: '正在载入模型',
+      preparing: '模型已生成，正在校验碰撞场景', prepared: '仿真场景已准备',
+    }[j.status_name] || '处理中';
     setStatus(el.generationStatus, j.message ? `${label}：${j.message}` : `${label}…`, 'info');
   }, async (j, missing) => {
     if (!j) {
       setStatus(el.generationStatus, missing || '生成任务中断', 'error');
       return;
     }
-    if (TERMINAL_OK.has(j.state)) {
-      setStatus(el.generationStatus, '生成完成，正在载入资产。', 'ok');
-      const assetId = j.asset && j.asset.asset_id;
-      const ok = await loadAssets({ select: assetId });
-      if (ok && assetId && state.selectedAssetId === assetId) {
-        setStatus(el.generationStatus, '生成完成。', 'ok');
-        showStage('scene');
-      } else if (ok) {
-        setStatus(el.generationStatus, '生成完成，但未在资产列表中找到该模型。', 'warn');
-      }
+    if (j.asset && (TERMINAL_OK.has(j.state) || j.status_name === 'preparing')) {
+      await adoptGeneratedAsset(j);
     } else if (TERMINAL_CANCEL.has(j.state)) {
       setStatus(el.generationStatus, '已取消生成。', 'warn');
     } else {
@@ -530,6 +532,55 @@ async function onGenerate(e) {
 
 /* ---------------- Scene ---------------- */
 
+async function adoptGeneratedAsset(job) {
+  const assetId = job.asset.asset_id;
+  state.scenePending = true;
+  updateControls();
+  try {
+    const run = job.run_id ? (await api(`/api/runs/${encodeURIComponent(job.run_id)}`)).run : null;
+    if (run && run.status !== 'prepared') return;
+    const ok = await loadAssets({ select: assetId, preview: !run });
+    if (!ok || state.selectedAssetId !== assetId) throw new Error('资产列表中找不到新模型');
+    showStage('scene');
+    if (run) {
+      if (!(await activatePreparedScene(run, state.sceneToken))) return;
+      setStatus(el.generationStatus, '生成完成，已导入仿真。', 'ok');
+      setStatus(el.sceneStatus, '场景已自动准备。可调整参数，或进入训练。', 'ok');
+    } else if (job.status_name === 'preparing') {
+      setStatus(el.generationStatus, '模型已生成，自动准备场景失败。', 'warn');
+      setStatus(el.sceneStatus, `自动准备失败：${job.message}`, 'error');
+    } else {
+      setStatus(el.generationStatus, '生成完成。', 'ok');
+      setStatus(el.sceneStatus, '可设置夹取参数并准备场景。', 'info');
+    }
+  } catch (error) {
+    setStatus(el.generationStatus, `载入生成结果失败：${errText(error)}`, 'error');
+    setStatus(el.sceneStatus, `载入场景失败：${errText(error)}`, 'error');
+  } finally {
+    state.scenePending = false;
+    updateControls();
+  }
+}
+
+async function activatePreparedScene(run, token) {
+  if (!run?.scene) throw new Error('服务未返回场景数据');
+  if (!state.stage) throw new Error('三维视图不可用');
+  await state.stage.scene(run.scene);
+  if (token !== state.sceneToken) return false;
+  state.run = run;
+  state.activeSceneId = run.id;
+  state.sceneLoaded = true;
+  el.widthMm.value = run.scene.width_mm;
+  el.orientation.value = run.scene.orientation;
+  hideEmpty();
+  state.stage.fit();
+  state.stage.collision(Boolean(el.collisionToggle && el.collisionToggle.checked));
+  setText(el.viewLabel, `${run.asset.name} · 仿真场景`);
+  renderAssetDetails();
+  resetTrainingView();
+  return true;
+}
+
 function readWidth() {
   const v = Number(el.widthMm && el.widthMm.value);
   if (!Number.isFinite(v) || v < 45 || v > 60) return null;
@@ -538,7 +589,7 @@ function readWidth() {
 
 async function onPrepare(e) {
   e.preventDefault();
-  if (state.job) return;
+  if (state.job || state.scenePending) return;
   const a = selectedAsset();
   if (!a) {
     setStatus(el.sceneStatus, '请先选择资产。', 'warn');
@@ -552,9 +603,11 @@ async function onPrepare(e) {
   }
   stopPlayback();
   const token = ++state.sceneToken;
+  state.assetToken++;
+  state.reviewToken++;
   state.run = null;
   state.sceneLoaded = false;
-  if (el.prepareBtn) el.prepareBtn.disabled = true;
+  state.scenePending = true;
   updateControls();
   setStatus(el.sceneStatus, '正在搭建场景…', 'info');
   try {
@@ -563,27 +616,17 @@ async function onPrepare(e) {
       body: { asset: a.name, asset_id: a.asset_id, width_mm: width, orientation: el.orientation.value },
     });
     if (token !== state.sceneToken) return;
-    const run = res.run;
-    if (!run || !run.scene) throw new Error('服务未返回场景数据');
-    state.run = run;
-    await state.stage.scene(run.scene);
-    if (token !== state.sceneToken) return;
-    state.activeSceneId = run.id;
-    state.sceneLoaded = true;
-    hideEmpty();
-    state.stage.fit();
-    state.stage.collision(Boolean(el.collisionToggle && el.collisionToggle.checked));
-    setText(el.viewLabel, `${a.name} · 仿真场景`);
-    renderAssetDetails();
+    if (!(await activatePreparedScene(res.run, token))) return;
     setStatus(el.sceneStatus, `场景校验通过，夹取宽度 ${width} 毫米，可以开始训练。`, 'ok');
-    resetTrainingView();
     showStage('train');
   } catch (err) {
     if (token !== state.sceneToken) return;
     state.sceneLoaded = false;
     setStatus(el.sceneStatus, `场景准备失败：${errText(err)}`, 'error');
+  } finally {
+    state.scenePending = false;
+    updateControls();
   }
-  updateControls();
 }
 
 /* ---------------- Training ---------------- */
@@ -760,7 +803,7 @@ function trackTraining(id) {
 }
 
 async function onTrain() {
-  if (state.job || state.run?.status !== 'prepared' || !state.sceneLoaded) return;
+  if (state.job || state.scenePending || state.run?.status !== 'prepared' || !state.sceneLoaded) return;
   el.trainBtn.disabled = true;
   alertWorkspace('');
   resetTrainingView();
@@ -811,6 +854,7 @@ function renderRuns() {
 }
 
 async function selectRun(id) {
+  if (state.scenePending) return;
   stopPlayback();
   const ticket = ++state.reviewToken;
   state.reviewRun = null;
@@ -866,6 +910,7 @@ async function selectRun(id) {
 }
 
 async function loadReplay(row, run) {
+  if (state.scenePending) return;
   stopPlayback();
   const ticket = ++state.reviewToken;
   const buttons = el.episodeList.querySelectorAll('button');
@@ -958,6 +1003,7 @@ async function init() {
   el.sceneForm.addEventListener('submit', onPrepare);
   const invalidateScene = () => {
     if (!state.run || state.run.status !== 'prepared') return;
+    state.sceneToken++;
     state.run = null;
     state.sceneLoaded = false;
     setStatus(el.sceneStatus, '物体设置已修改，请重新确认场景。', 'warn');
@@ -990,7 +1036,17 @@ async function init() {
     if (running && !state.job) {
       showStage('train');
       trackTraining(running.id);
+      return;
     }
+    const generating = response.jobs.find(job => job.kind === 'generate' && !job.dry_run
+      && job.payload?.prepare_scene !== false && (job.payload?.format || 'glb') === 'glb'
+      && ['queued', 'running'].includes(job.state));
+    if (generating && !state.job) {
+      trackGeneration(generating.id);
+      return;
+    }
+    const generated = response.jobs.find(job => job.kind === 'generate' && job.run_id && job.asset);
+    if (generated && !state.job) await adoptGeneratedAsset(generated);
   } catch (error) {
     alertWorkspace(`无法读取正在运行的任务：${errText(error)}`, 'warn');
   }

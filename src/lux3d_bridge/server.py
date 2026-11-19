@@ -282,10 +282,11 @@ class Job:
 class JobRunner(threading.Thread):
     """Runs one Lux3D task, recording every status transition for the page."""
 
-    def __init__(self, job: Job, root: str) -> None:
+    def __init__(self, job: Job, root: str, asset_lock: threading.Lock) -> None:
         super().__init__(daemon=True)
         self.job = job
         self.root = root
+        self.asset_lock = asset_lock
 
     def _log(self, text: str) -> None:
         for line in text.splitlines():
@@ -297,27 +298,29 @@ class JobRunner(threading.Thread):
         job, config = self.job, self.job.config
         payload = config["payload"]
         job.state = "running"
-        buffer = io.StringIO()
         try:
-            with contextlib.redirect_stdout(buffer):
-                if job.dry_run:
+            if job.dry_run:
+                buffer = io.StringIO()
+                with self.asset_lock, contextlib.redirect_stdout(buffer):
                     aholo.create_task(
                         config["profile"], config["key"], payload, config["mode"],
                         base_url=config["base_url"], create_path=config["create_path"],
                         dry_run=True,
                     )
-                    job.payload_json = payload
-                    job.status_name = "dry-run"
-                    job.state = "success"
-                    job.message = "dry-run: request body printed, nothing was sent"
-                    return
-                task_id = aholo.create_task(
-                    config["profile"], config["key"], payload, config["mode"],
-                    base_url=config["base_url"], create_path=config["create_path"],
-                )
-                job.task_id = task_id
-                job.status_name = "init"
-                url = self._poll(task_id)
+                self._log(buffer.getvalue())
+                job.payload_json = payload
+                job.status_name = "dry-run"
+                job.message = "dry-run: request body printed, nothing was sent"
+                job.state = "success"
+                return
+            task_id = aholo.create_task(
+                config["profile"], config["key"], payload, config["mode"],
+                base_url=config["base_url"], create_path=config["create_path"],
+            )
+            job.task_id = task_id
+            job.status_name = "init"
+            url = self._poll(task_id)
+            with self.asset_lock:
                 path = aholo.download(url, config["assets_out"], config["name"], overwrite=True)
                 job.log.append(f"downloaded {os.path.basename(path)}")
                 entry = asset.ingest(
@@ -336,16 +339,27 @@ class JobRunner(threading.Thread):
                     },
                 )
                 job.asset = entry
-                job.state = "success"
-                job.message = asset.describe(entry)
+                if config["prepare_scene"]:
+                    job.status_name = "preparing"
+                    job.touch()
+                    width, orientation = workbench.automatic_settings(entry)
+                    run = workbench.prepare(self.root, config["engine"], entry, path, width, orientation)
+                    job.run_id = run["id"]
+                    job.log.append(f"已准备仿真场景 {run['id']}")
+                    job.status_name = "prepared"
+            job.message = asset.describe(entry)
+            job.state = "success"
         except aholo.AholoError as exc:
-            job.state = "failed"
             job.message = str(exc)
-        except (OSError, ValueError) as exc:
             job.state = "failed"
+        except (OSError, ValueError) as exc:
             job.message = f"{type(exc).__name__}: {exc}"
+            job.state = "failed"
+        except subprocess.TimeoutExpired:
+            job.message = "场景校验超时。"
+            job.state = "failed"
         finally:
-            self._log(buffer.getvalue())
+            job.touch()
 
     def _poll(self, task_id: str) -> str:
         job, config = self.job, self.job.config
@@ -512,6 +526,7 @@ class Jobs:
     def __init__(self, root: str) -> None:
         self.root = root
         self._lock = threading.Lock()
+        self._asset_lock = threading.Lock()
         self._jobs: Dict[str, Job] = {}
 
     def submit(self, payload: Dict[str, Any], config: Dict[str, Any]) -> Job:
@@ -520,7 +535,7 @@ class Jobs:
         if job.kind in ("train", "policy"):
             runner = TrainingRunner(job, self.root)
         else:
-            runner = JobRunner(job, self.root)
+            runner = JobRunner(job, self.root, self._asset_lock)
         with self._lock:
             self._jobs[job.id] = job
         runner.start()
@@ -761,7 +776,7 @@ class App:
         if entry is None or source is None:
             raise ApiError("当前模型的 GLB 文件不存在。", 404)
         try:
-            width = float(body.get("width_mm", 50))
+            width = float(body.get("width_mm", workbench.DEFAULT_GRASP_WIDTH_MM))
             orientation = body.get("orientation", "upright")
             if not isinstance(orientation, str):
                 raise ValueError("请选择有效的物体朝向。")
@@ -834,6 +849,17 @@ class App:
         dry_run = bool(body.get("dry_run"))
         if not dry_run and not self.key:
             raise ApiError("no AHOLO_API_KEY: put it in .env, or tick dry-run", 409)
+        output_format = body.get("format") or "glb"
+        prepare_scene = body.get("prepare_scene", False)
+        if not isinstance(prepare_scene, bool):
+            raise ApiError("prepare_scene must be a boolean")
+        if prepare_scene and output_format != "glb":
+            raise ApiError("自动准备仿真场景需要 GLB 格式。")
+        if not dry_run and output_format == "glb" and (prepare_scene or "prepare_scene" not in body):
+            readiness = workbench.readiness(self.engine)
+            if prepare_scene and not readiness["ready"]:
+                raise ApiError(readiness["reason"], 409)
+            prepare_scene = readiness["ready"]
 
         gen_root = os.path.join(self.root, GEN_DIR)
         config = {
@@ -848,10 +874,12 @@ class App:
             "poll_path": self.poll_path,
             "assets_out": os.path.join(gen_root, "assets"),
             "mesh_out": os.path.join(gen_root, "meshes"),
-            "format": body.get("format") or "glb",
+            "format": output_format,
+            "prepare_scene": prepare_scene,
+            "engine": self.engine,
             "payload": aholo.default_payload(
                 prompt, body.get("image_url"), version, face_count,
-                body.get("format") or "glb", bool(body.get("pbr", True)), style,
+                output_format, bool(body.get("pbr", True)), style,
             ),
         }
         job = self.jobs.submit(body, config)

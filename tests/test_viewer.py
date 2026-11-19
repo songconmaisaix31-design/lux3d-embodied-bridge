@@ -169,6 +169,8 @@ class ApiTests(unittest.TestCase):
             ({"prompt": "x", "name": "../evil"}, "name must match"),
             ({"prompt": "x", "version": "G2"}, "version"),
             ({"prompt": "x", "mode": "text-to-video"}, "mode"),
+            ({"prompt": "x", "prepare_scene": "false"}, "prepare_scene"),
+            ({"prompt": "x", "prepare_scene": True, "format": "obj"}, "GLB"),
         ]
         for payload, expected in cases:
             with self.assertRaises(server.ApiError) as caught:
@@ -246,7 +248,7 @@ class HttpTests(unittest.TestCase):
     def test_generate_dry_run_over_http(self):
         request = urllib.request.Request(
             self.url("/api/generate"),
-            data=json.dumps({"prompt": "a crate", "dry_run": True, "name": "httpdry"}).encode(),
+            data=json.dumps({"prompt": "a crate", "dry_run": True, "name": "httpdry", "prepare_scene": True}).encode(),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
@@ -262,6 +264,8 @@ class HttpTests(unittest.TestCase):
                 break
             time.sleep(0.05)
         self.assertEqual(state, "success")
+        self.assertIsNone(body["job"]["asset"])
+        self.assertIsNone(body["job"]["run_id"])
 
 
 if __name__ == "__main__":
