@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { createWorktopContact } from './workbench-contact.js';
 
 const MATERIAL = {
   arm: new THREE.MeshStandardMaterial({ color: 0xe1e6df, roughness: 0.42, metalness: 0.19 }),
@@ -63,6 +64,7 @@ export function createWorkbenchStage(canvas) {
   renderer.toneMappingExposure = 1.21;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.localClippingEnabled = true;
 
   const world = new THREE.Scene();
   world.background = new THREE.Color(0x151d1a);
@@ -105,6 +107,7 @@ export function createWorkbenchStage(canvas) {
   let goal = null;
   let target = null;
   let outline = null;
+  let resolveContact = null;
   let showCollision = false;
   let revision = 0;
   world.add(content);
@@ -143,6 +146,7 @@ export function createWorkbenchStage(canvas) {
     config = null;
     frames = [];
     outline = null;
+    resolveContact = null;
     world.remove(content);
     disposeGroup(content);
     content = next;
@@ -181,6 +185,7 @@ export function createWorkbenchStage(canvas) {
     applyPose(fingers[0], poses.fingers.left);
     applyPose(fingers[1], poses.fingers.right);
     applyPose(target, poses.props[0]);
+    resolveContact(target, fingers);
     goal.position.set(poses.goal[0], config.surface_m + 0.0015, poses.goal[2]);
     render();
   }
@@ -196,11 +201,10 @@ export function createWorkbenchStage(canvas) {
     next.reset(1000);
     const initial = JSON.parse(next.poses());
     const group = new THREE.Group();
-    for (const fixture of data.spec.scene.fixtures.filter(item => item.name === 'table')) {
-      const mesh = box(fixture.half, MATERIAL.table);
-      mesh.position.fromArray(fixture.center);
-      group.add(mesh);
-    }
+    const table = data.spec.scene.fixtures.find(item => item.name === 'table');
+    const tableMesh = box(table.half, MATERIAL.table);
+    tableMesh.position.fromArray(table.center);
+    group.add(tableMesh);
     const nextLinks = data.spec.robot.links.map((link, i) => {
       const part = new THREE.Group();
       const mesh = box(link.shape.Box.half, i < 2 ? MATERIAL.joint : MATERIAL.arm);
@@ -209,7 +213,12 @@ export function createWorkbenchStage(canvas) {
       group.add(part);
       return part;
     });
-    const nextFingers = [0, 1].map(() => box(data.spec.robot.gripper.finger_half, MATERIAL.joint));
+    const fingerHalf = data.spec.robot.gripper.finger_half;
+    const nextFingers = [0, 1].map(() => {
+      const material = MATERIAL.joint.clone();
+      material.clipShadows = true;
+      return box(fingerHalf, material);
+    });
     group.add(...nextFingers);
     const nextGoal = new THREE.Mesh(
       new THREE.RingGeometry(data.spec.task.params.goal_xz_tol - 0.0015, data.spec.task.params.goal_xz_tol, 64),
@@ -227,9 +236,10 @@ export function createWorkbenchStage(canvas) {
     const bounds = new THREE.BoxGeometry(...data.size_m);
     const nextOutline = new THREE.LineSegments(
       new THREE.EdgesGeometry(bounds),
-      new THREE.LineBasicMaterial({ color: 0xc6efc7, transparent: true, opacity: 0.9, depthTest: false }),
+      new THREE.LineBasicMaterial({ color: 0xc6efc7, transparent: true, opacity: 0.9 }),
     );
     bounds.dispose();
+    nextOutline.scale.setScalar(1.004);
     nextOutline.visible = showCollision;
     nextTarget.add(orientation, nextOutline);
     group.add(nextTarget);
@@ -242,6 +252,8 @@ export function createWorkbenchStage(canvas) {
     goal = nextGoal;
     target = nextTarget;
     outline = nextOutline;
+    // 只修正视口的接触显示。回放仍用引擎原始状态核对指纹。
+    resolveContact = createWorktopContact(table, data.size_m, fingerHalf);
     paint(initial);
     fit();
   }
