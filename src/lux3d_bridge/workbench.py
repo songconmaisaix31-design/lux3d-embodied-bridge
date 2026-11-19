@@ -15,6 +15,7 @@ from .workbench_config import EVAL_EPISODES, EVAL_SEED
 
 PRESET = Path("crates/oriera-embodied/specs/official/tabletop-4dof-pick.json")
 KERNEL = Path("examples/15-embodied-sim/vendor/oriera")
+CONTACT_KERNEL = KERNEL.with_name("oriera-contact")
 KERNEL_FILES = {"oriera_wasm.js", "oriera_wasm_bg.wasm"}
 TURN = math.pi / 2
 ORIENTATIONS = {
@@ -37,11 +38,11 @@ def readiness(engine: str) -> dict:
     if not engine:
         return {"ready": False, "reason": "启动服务时需要指定 OriEra 引擎目录。"}
     collector, module = engine_files(engine)
-    kernel = Path(engine) / KERNEL
+    kernel = Path(engine) / CONTACT_KERNEL
     if not collector.is_file() or not module.is_file():
         return {"ready": False, "reason": "需要先编译 OriEra 的 release 采集程序和 Python 扩展。"}
     if not all((kernel / name).is_file() for name in KERNEL_FILES):
-        return {"ready": False, "reason": "OriEra 目录缺少浏览器仿真模块。"}
+        return {"ready": False, "reason": "OriEra 目录缺少带接触约束的浏览器仿真模块。"}
     if shutil.which("node") is None:
         return {"ready": False, "reason": "独立评估需要 Node.js。"}
     if importlib.util.find_spec("torch") is None:
@@ -74,7 +75,18 @@ def scene_for(preset: dict, entry: dict, width_mm: float, orientation: str) -> d
         "placement": {"range": {"x": [0.172, 0.188], "y": surface + half[1] + 0.008, "z": [-0.027, -0.013]}},
     })
     gripper = preset["robot"]["gripper"]
-    gripper["gap_closed"] = dims[2] - 0.004
+    gripper.update({
+        "finger_x": 0.116,
+        "finger_half": [0.016, 0.033, 0.004],
+        "gap_open": max(gripper["gap_open"], dims[2] + 0.024),
+        "gap_closed": dims[2] + 0.0082,
+        "gap_rate": 0.0012,
+        "friction": 2.2,
+    })
+    preset["physics"].update({
+        "substeps": 4, "solver_iterations": 10,
+        "contact_softness_hz": 140.0, "contact_margin_m": 0.0012,
+    })
     preset["randomization"]["enabled"] = False
     preset["task"]["id"] = "pick_place@v2"
     preset["task"]["params"].update({
@@ -87,7 +99,7 @@ def scene_for(preset: dict, entry: dict, width_mm: float, orientation: str) -> d
     preset["meta"] = {"name": prop["name"]}
     return {
         "spec": preset, "scale": scale, "pivot_m": pivot, "size_m": dims,
-        "surface_m": surface, "asset_rotation": rotation,
+        "surface_m": surface, "asset_rotation": rotation, "kernel": "contact",
     }
 
 
@@ -131,7 +143,7 @@ def run_command(root: str, engine: str, run_id: str) -> tuple[Path, list[str]]:
     return directory, [
         sys.executable, "-u", str(script), "--run-dir", str(directory),
         "--collector", str(collector), "--native", str(native),
-        "--kernel", str(Path(engine) / KERNEL),
+        "--kernel", str(Path(engine) / CONTACT_KERNEL),
     ]
 
 

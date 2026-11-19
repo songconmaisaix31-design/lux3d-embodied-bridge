@@ -784,6 +784,8 @@ class App:
                 raise ApiError("找不到已确认的场景。", 404)
             if record["status"] != "prepared":
                 raise ApiError("此场景已提交。重新确认场景可发起另一次训练。", 409)
+            if record["scene"].get("kernel") != "contact":
+                raise ApiError("请重新确认场景，以启用当前引擎的接触约束。", 409)
             active = self.jobs.listing()
             if any(job["kind"] == "policy" and job["state"] in ("queued", "running") for job in active):
                 raise ApiError("已有训练正在运行。", 409)
@@ -923,9 +925,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self.app.runs())
             if path.startswith("/api/workbench/kernel/"):
                 name = path.removeprefix("/api/workbench/kernel/")
+                kernel = workbench.KERNEL
+                if name.startswith("contact/"):
+                    kernel = workbench.CONTACT_KERNEL
+                    name = name.removeprefix("contact/")
                 if name not in workbench.KERNEL_FILES or not self.app.engine:
                     raise ApiError("找不到浏览器仿真模块。", 404)
-                source = Path(self.app.engine) / workbench.KERNEL / name
+                source = Path(self.app.engine) / kernel / name
                 if not source.is_file():
                     raise ApiError("找不到浏览器仿真模块。", 404)
                 return self._send(200, source.read_bytes(), CONTENT_TYPES[source.suffix])

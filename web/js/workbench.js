@@ -837,6 +837,11 @@ async function selectRun(id) {
       text: result.passed ? '达到抓放验收门槛' : '未达到抓放验收门槛',
     });
     el.evaluationSummary.append(score, status);
+    if (Number.isInteger(result.collision_free_episodes)) {
+      el.evaluationSummary.append(h('p', {
+        text: `原始物理回放中，${result.collision_free_episodes}/${result.episodes} 集无穿透。`,
+      }));
+    }
     for (const [index, row] of result.runs.entries()) {
       const button = h('button', {
         type: 'button', className: 'item-btn', dataset: { seed: String(row.seed) }, 'aria-pressed': 'false',

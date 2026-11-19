@@ -42,18 +42,22 @@ function applyPose(target, pose) {
   target.quaternion.fromArray(pose.rot);
 }
 
-let kernel;
-function loadKernel() {
-  if (!kernel) {
-    kernel = import('/api/workbench/kernel/oriera_wasm.js').then(async mod => {
+const kernels = new Map();
+function loadKernel(version) {
+  const path = version === 'contact'
+    ? '/api/workbench/kernel/contact/oriera_wasm.js'
+    : '/api/workbench/kernel/oriera_wasm.js';
+  if (!kernels.has(path)) {
+    const pending = import(path).then(async mod => {
       await mod.default();
       return mod.OrieraSim;
     }).catch(error => {
-      kernel = null;
+      kernels.delete(path);
       throw error;
     });
+    kernels.set(path, pending);
   }
-  return kernel;
+  return kernels.get(path);
 }
 
 export function createWorkbenchStage(canvas) {
@@ -185,14 +189,14 @@ export function createWorkbenchStage(canvas) {
     applyPose(fingers[0], poses.fingers.left);
     applyPose(fingers[1], poses.fingers.right);
     applyPose(target, poses.props[0]);
-    resolveContact(target, fingers);
+    resolveContact?.(target, fingers);
     goal.position.set(poses.goal[0], config.surface_m + 0.0015, poses.goal[2]);
     render();
   }
 
   async function scene(data) {
     const ticket = ++revision;
-    const [Engine, object] = await Promise.all([loadKernel(), loadAsset(data.glb_url)]);
+    const [Engine, object] = await Promise.all([loadKernel(data.kernel), loadAsset(data.glb_url)]);
     if (ticket !== revision) {
       disposeGroup(object);
       return;
@@ -252,8 +256,8 @@ export function createWorkbenchStage(canvas) {
     goal = nextGoal;
     target = nextTarget;
     outline = nextOutline;
-    // 只修正视口的接触显示。回放仍用引擎原始状态核对指纹。
-    resolveContact = createWorktopContact(table, data.size_m, fingerHalf);
+    // 历史回放使用原来的显示接触处理。新引擎直接输出碰撞体位姿。
+    if (data.kernel !== 'contact') resolveContact = createWorktopContact(table, data.size_m, fingerHalf);
     paint(initial);
     fit();
   }
@@ -261,7 +265,7 @@ export function createWorkbenchStage(canvas) {
   async function replay(data) {
     if (!simulation) throw new Error('请先加载该评估使用的场景。');
     const ticket = ++revision;
-    const Engine = await loadKernel();
+    const Engine = await loadKernel(config.kernel);
     const run = Engine.from_spec_json(JSON.stringify(config.spec));
     try {
       run.reset(data.seed);

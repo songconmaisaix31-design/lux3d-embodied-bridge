@@ -75,11 +75,11 @@ class BrowserEngine:
     def holding(self):
         return self.held
 
-    def fingerprint(self):
+    def audit_result(self):
         result = self.request("end")
         if result["specHash"] != self.spec_hash:
             raise ValueError("训练场景与 WebAssembly 评估场景不一致。")
-        return result["fingerprint"]
+        return result
 
 
 def collect(directory, collector):
@@ -205,9 +205,13 @@ def rollout(env, model, spec, seed, *, record=False):
     data = {
         "seed": seed, "steps": frame + 1, "success": bool(success and lifted),
         "lifted": lifted, "settled_in_goal": bool(success),
-        "reward": reward, "fingerprint": str(env.fingerprint()),
+        "reward": reward,
     }
     if record:
+        audit = env.audit_result()
+        data["fingerprint"] = audit["fingerprint"]
+        data["contact"] = audit["contact"]
+        data["success"] &= audit["contact"]["penetrating_frames"] == 0
         data["actions"] = actions
     return data
 
@@ -316,11 +320,13 @@ def main():
         if child.returncode:
             raise RuntimeError("OriEra WebAssembly 评估进程异常结束。")
         successes = sum(int(item["success"]) for item in rows)
+        clean = sum(item["contact"]["penetrating_frames"] == 0 for item in rows)
         write_json(directory / "policy_report.json", {
             "algorithm": "behavior_cloning", "checkpoint": checkpoint.name, "epoch": stored["epoch"],
             "spec_hash": report["spec_hash"], "demonstrations": len(episodes),
             "episodes": EVAL_EPISODES, "successes": successes, "success_rate": successes / EVAL_EPISODES,
-            "passed": successes >= MIN_SUCCESSES, "required_successes": MIN_SUCCESSES,
+            "passed": successes >= MIN_SUCCESSES and clean == EVAL_EPISODES,
+            "required_successes": MIN_SUCCESSES, "collision_free_episodes": clean,
             "runs": rows, "curve": curve, "engine": native.build_info(), "evaluation_backend": "oriera-wasm",
         })
     except Cancelled:
