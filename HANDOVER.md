@@ -1,7 +1,7 @@
 # 交接文档 · lux3d-embodied-bridge
 
 > 写给下一个接手的人：这个项目在哪、现在能跑到什么程度、哪些地方会咬人、下一步该动哪里。
-> 最后更新：2026-11-19 · commit `169a140` · 全部结论都在本机实测过。
+> 最后更新：2026-11-19 · 本文件随 `98f19f4` 提交（内容覆盖到 `169a140` 为止的代码状态）· 全部结论都在本机实测过。
 
 ---
 
@@ -127,7 +127,7 @@ python bridge.py serve --engine C:\Users\DW\repos\3D-engine
 
 | 东西 | 版本 / 路径 | 备注 |
 |---|---|---|
-| Python | 3.13.13 | 只用标准库，无 pip 依赖 |
+| Python | 3.13.18 | 只用标准库，无 pip 依赖 |
 | Node | 24.16.0 | 只在手工跑 `node --test` 时用到，不是运行依赖 |
 | Rust | 1.100.0，工具链 `stable-x86_64-pc-windows-gnu` | 引擎要求 ≥ 1.87 |
 | GCC | MinGW-w64 16.2.0（winlibs，msvcrt）`C:\Users\DW\winlibs\mingw64\bin` | 没有 MSVC，见下 |
@@ -173,7 +173,8 @@ out/
     └── lerobot-v21/           # 数据集：data/ + meta/ + observation.images.*/episode_*/frame_*.png
 ```
 
-- 现有两次 run：`20261119-060737-crate_web`（只准备）、`20261119-061746-crate_web`（真跑完）。
+- 现有三次 run：`20261119-060737-crate_web`（只准备）、`20261119-061746-crate_web`（真跑完，45.0 steps/s）、
+  `20261119-074328-crate_live`（真跑完，54.6 steps/s，用的是 `out/live` 那份 `crate_live.stl`）。
 - run 目录可以用 `LUX3D_RUNS_DIR=<绝对路径>` 挪走（测试就是这么隔离的，不会污染 `out/app/runs`）。
 - `out/` 是证据，不是源码；清空后重跑 `demo` + 一次生成/训练即可重建。
 

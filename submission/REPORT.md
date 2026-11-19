@@ -177,7 +177,7 @@ python bridge.py bench --engine /path/to/OriEra --out out/live --episodes 2 --ca
 
 | 轮次 | 输入 | 三角数 | 包围盒 (m) | asset_id | 备注 |
 |---|---|---|---|---|---|
-| v1 | `a small wooden shipping crate with metal corner brackets, single object, centered`（probe，`faceCount` 10000） | 21,874 | — | `474c2fd22f0d3f9f` | 首轮探针：结构对，但面数偏高、壁厚偏厚 |
+| v1 | `a small wooden shipping crate with metal corner brackets, single object, centered`（`faceCount` 30000，`taskId 8389570`） | 21,874 | 0.600 × 0.511 × 0.535 | `474c2fd22f0d3f9f` | 首轮探针：结构对，但面数偏高、壁厚偏厚 |
 | v2 | 同上 prompt，`faceCount` 20000，G1-Turbo（`taskId 8390507`） | 14,902 | 0.600 × 0.414 × 0.447 | `6e593a666736fce0` | 采用：轮廓干净、包围盒落在桌面尺度、14,902 面足以让凸包收敛 |
 | v3 | 未做 | — | — | — | 时间预算投给了引擎侧的真实回执，而不是第三轮外观调优 |
 

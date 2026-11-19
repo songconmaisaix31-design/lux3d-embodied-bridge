@@ -28,6 +28,13 @@ import urllib.request
 import zipfile
 from typing import Any, Dict, Iterable, Optional, Sequence
 
+from . import __version__
+
+#: One source of truth for the version we announce; it must not drift from
+#: ``pyproject.toml`` / ``__init__.py`` (it did once: 0.2 on the wire, 0.1.0 in
+#: the package metadata).
+USER_AGENT = f"lux3d-embodied-bridge/{__version__}"
+
 PROFILES: Dict[str, Dict[str, str]] = {
     "global": {
         "base": "https://api.aholo.ai",
@@ -92,7 +99,7 @@ def _request(method: str, url: str, key: str, auth: str, timeout: int,
     if payload is not None:
         request.add_header("Content-Type", "application/json")
     request.add_header("Authorization", key if auth == "raw" else f"Bearer {key}")
-    request.add_header("User-Agent", "lux3d-embodied-bridge/0.2")
+    request.add_header("User-Agent", USER_AGENT)
     where = f"{method} {url}"
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -294,7 +301,7 @@ def wait_for_artifact(
 
 def download(url: str, out_dir: str, name: str, overwrite: bool = True) -> str:
     os.makedirs(out_dir, exist_ok=True)
-    request = urllib.request.Request(url, headers={"User-Agent": "lux3d-embodied-bridge/0.2"})
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=180) as response:
         blob = response.read()
     ext = os.path.splitext(urllib.parse.urlparse(url).path)[1].lower() or ".bin"

@@ -167,7 +167,7 @@ design file.
   状态机、下载有效期、轮询参数、可直接跑的 Python，以及每一步踩过的坑。
 - [`docs/PRODUCT.md`](docs/PRODUCT.md) — 产品目标：要缝的是什么、谁会用、明确不做什么、怎么算成了、路线图。
 - [`docs/BENCH-COMMAND.md`](docs/BENCH-COMMAND.md) — 把资产交给引擎的命令、参数与两个实测坑。
-- [`docs/AHOLO-LUX3D.md`](docs/AHOLO-LUX3D.md) — 两次真实生成的记录：参数、字节数、面数、资产 id。
+- [`docs/AHOLO-LUX3D.md`](docs/AHOLO-LUX3D.md) — 一次真实生成的逐步记录：请求参数、字节数、面数、包围盒、资产 id。
 - [`docs/APP.md`](docs/APP.md) — 应用那半边：三步流程、每一步的落盘产物、训练命令逐参数解释、HTTP API、以及每个页面元素的数据来源。
 - [`HANDOVER.md`](HANDOVER.md) — 交接文档：目录与环境、磁盘约定（`out/` 里有什么）、排错速查、已知边界、下一步路线与接手清单。
 
@@ -204,13 +204,13 @@ lux3d-embodied-bridge/
 ├── web/                      # the app page (no build step; three.js vendored)
 ├── fixtures/                 # cube.glb (generated), desk_arm.urdf
 ├── tests/                    # 45 offline tests
-├── docs/                     # AHOLO-API, PRODUCT, BENCH-COMMAND, APP
+├── docs/                     # AHOLO-API, AHOLO-LUX3D, PRODUCT, BENCH-COMMAND, APP
 └── submission/               # hackathon report / demo script / post draft
 ```
 
 ## Status · 状态
 
-Verified on two machines. Windows 11 / Python 3.13.18: 17 tests at the time, the offline demo writes its three artifacts, one real Lux3D generation was carried through to an injected STL, and the injected URDF re-parses. Linux x86_64 / Python 3.12 / Rust 1.100: the whole chain ran against a real engine checkout — the Lux3D GLB became an STL, was injected into the URDF, imported as a 2-DoF `RobotSpec`, collected 2 episodes, and passed `--verify-determinism full` (bit-identical double run). Two upstream CLI details only surface when you actually run it: `--verify-determinism` takes a value (`full|sample|off`), and paths must be absolute because cargo runs with the engine checkout as cwd. This bridge now does both.
+Verified on two machines. Windows 11 / Python 3.13.18: at that point the suite was **17 tests** (today it is 45, see the next paragraph), the offline demo writes its three artifacts, one real Lux3D generation was carried through to an injected STL, and the injected URDF re-parses. Linux x86_64 / Python 3.12 / Rust 1.100: the whole chain ran against a real engine checkout — the Lux3D GLB became an STL, was injected into the URDF, imported as a 2-DoF `RobotSpec`, collected 2 episodes, and passed `--verify-determinism full` (bit-identical double run). Two upstream CLI details only surface when you actually run it: `--verify-determinism` takes a value (`full|sample|off`), and paths must be absolute because cargo runs with the engine checkout as cwd. This bridge now does both.
 
 The application half was added on top of that and verified the same day: **45 offline tests pass** (17 original + 21 for URDF parsing / API routes / dry-run / HTTP + 7 for run preparation, the training job lifecycle and result parsing). One **real** generation went through the page's own endpoint — `POST /api/generate` → task `8396881` → `crate_web` (7,290 tris, asset `55d204cf9851ca74`) — and then that asset was trained on through the page as well: `POST /api/train` → run `20261119-061746-crate_web` → 2 episodes · 1400 transitions · 0/2 successes · `✓ 确定性复核（full）：双跑逐位一致` · spec_hash `b84b3add08d4a9c3`. On Windows this needed the `x86_64-pc-windows-gnu` Rust toolchain plus MinGW-w64 GCC (no MSVC linker on the box); the engine compiled in 2m55s and the run took 31s.
 
