@@ -24,9 +24,13 @@ def build_command(
     dump_robot_spec: str | None = None,
     episodes: int = 2,
     fingerprints: str | None = None,
-    verify_determinism: bool = True,
+    verify_determinism: str | bool = "full",
     extra: Sequence[str] = (),
 ) -> List[str]:
+    """``--verify-determinism`` takes a value in the engine's CLI: full|sample|off."""
+    mode = "full" if verify_determinism is True else "off" if verify_determinism is False else str(verify_determinism)
+    if mode not in ("full", "sample", "off"):
+        raise ValueError(f"verify_determinism must be full|sample|off, got {verify_determinism!r}")
     package_arg = f"{mesh_package}={mesh_base}"
     command: List[str] = [
         "cargo",
@@ -51,8 +55,7 @@ def build_command(
         command += ["--dump-robot-spec", dump_robot_spec]
     if fingerprints:
         command += ["--fingerprints", fingerprints]
-    if verify_determinism:
-        command.append("--verify-determinism")
+    command += ["--verify-determinism", mode]
     command += list(extra)
     return command
 

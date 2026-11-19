@@ -105,10 +105,11 @@ Auth is `Authorization: <key>` with **no** `Bearer` prefix.
 
 ## What is actually verified · 现在真正验证过什么
 
-- `python -m unittest discover -s tests` → **14 tests pass** (`GLB` parsing, deterministic asset ids, STL round-trip, URDF injection, command shaping, receipt diff, Lux3D wire contract).
+- `python -m unittest discover -s tests` → **17 tests pass** (`GLB` parsing, deterministic asset ids, STL round-trip, URDF injection, command shaping, receipt diff, Lux3D wire contract).
 - `python bridge.py demo` → produces `out/demo/meshes/crate.stl`, `out/demo/urdf/desk_arm.urdf`, `out/demo/meshes/assets.lock.json` on a clean checkout.
 - The generated URDF parses back clean (the injector re-parses its own output; a malformed description fails at write time, not at simulation time).
 - **A real Lux3D task ran end to end on 2026-11-19**: `text-to-3d`, `G1-Turbo`, `faceCount=30000` → `taskId=8389570`, `status=3` after ~2 min, one `tex_mesh.glb` (9.7 MB) → **21,874 triangles, bbox 0.600 × 0.511 × 0.535 m, asset_id `474c2fd22f0d3f9f`** → injected into `package://generated/crate_lux3d.stl`. Details in [`docs/AHOLO-LUX3D.md`](docs/AHOLO-LUX3D.md).
+- **The stamping chain then ran against the real engine on 2026-11-19** (OriEra 0.13.0, Rust 1.100, `rigid3d,cam,spec,urdf`): `desk_arm / 2 DoF`, 0 skipped links, `✓ 确定性复核（full）双跑逐位一致`, 2 episodes · 1400 transitions · 0% success (honest: a 2-DoF arm with a zero `home` cannot reach the table), 1400 real camera PNGs written. Numbers in [`docs/BENCH-COMMAND.md`](docs/BENCH-COMMAND.md) §3.1.
 
 ## Honest limits · 边界，写出来不藏着
 
@@ -141,7 +142,7 @@ lux3d-embodied-bridge/
 
 ## Status · 状态
 
-Verified on Windows 11, Python 3.13.18 (stdlib only): 14 tests pass, the offline demo writes its three artifacts, the injected URDF re-parses, and one real Lux3D generation was carried through to an injected STL. The `cargo run` line is shaped from the engine's documented CLI; it has **not** been executed here because this machine has no Rust toolchain — run it once before relying on it.
+Verified on two machines. Windows 11 / Python 3.13.18: 17 tests pass, the offline demo writes its three artifacts, one real Lux3D generation was carried through to an injected STL, and the injected URDF re-parses. Linux x86_64 / Python 3.12 / Rust 1.100: the whole chain ran against a real engine checkout — the Lux3D GLB became an STL, was injected into the URDF, imported as a 2-DoF `RobotSpec`, collected 2 episodes, and passed `--verify-determinism full` (bit-identical double run). Two upstream CLI details only surface when you actually run it: `--verify-determinism` takes a value (`full|sample|off`), and paths must be absolute because cargo runs with the engine checkout as cwd. This bridge now does both.
 
 ## License · 许可
 

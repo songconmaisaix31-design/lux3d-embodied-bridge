@@ -114,8 +114,28 @@ class BenchTests(unittest.TestCase):
         joined = bench.render(command)
         self.assertIn("--urdf-robot /out/urdf/desk_arm.urdf", joined)
         self.assertIn("--mesh-package generated=/out/meshes", joined)
-        self.assertIn("--verify-determinism", joined)
+        self.assertIn("--verify-determinism full", joined)
         self.assertIn("--features rigid3d,cam,spec,urdf", joined)
+
+
+class BenchModeTests(unittest.TestCase):
+    def test_verify_mode_is_always_a_value(self):
+        command = bench.build_command(
+            engine_dir="/engine",
+            urdf_robot="/out/urdf/desk_arm.urdf",
+            mesh_base="/out/meshes",
+            mesh_package="generated",
+            verify_determinism="sample",
+        )
+        self.assertEqual(command[-2:], ["--verify-determinism", "sample"])
+
+    def test_bool_is_normalised(self):
+        self.assertIn("full", bench.build_command("/e", "/u", "/m", "p", verify_determinism=True))
+        self.assertIn("off", bench.build_command("/e", "/u", "/m", "p", verify_determinism=False))
+
+    def test_rejects_unknown_mode(self):
+        with self.assertRaises(ValueError):
+            bench.build_command("/e", "/u", "/m", "p", verify_determinism="sometimes")
 
 
 class VerifyTests(unittest.TestCase):

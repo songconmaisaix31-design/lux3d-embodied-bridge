@@ -15,11 +15,16 @@ cargo run -p oriera-agent --example embodied_sim_collect \
   --dump-robot-spec out/demo/robot.json \
   --fingerprints    out/demo/fingerprints.v2.json \
   --episodes 2 \
-  --verify-determinism
+  --verify-determinism full \
+  --cam --out /abs/path/to/out/frames
 ```
 
-`python bridge.py bench --engine /path/to/OriEra --out out/demo` 会打印同一行；加 `--run`
-就直接执行。
+`python bridge.py bench --engine /path/to/OriEra --out out/live` 会打印同一行；加 `--run`
+就直接执行，加 `--cam` 会额外落相机帧。
+
+> **两个坑，实测踩过**：引擎的 `cargo run` 以 `<engine>` 为工作目录，所有路径必须传
+> 绝对路径（本桥现在自动 `abspath`）；`--verify-determinism` 是带值参数，不带值会直接
+> 报「需要一个值」。
 
 ## 2. 每个参数在做什么
 
@@ -31,7 +36,8 @@ cargo run -p oriera-agent --example embodied_sim_collect \
 | `--dump-robot-spec` | 导出最终 RobotSpec（含 skipped 与 warnings） | 评审/复核用，别只留在终端 |
 | `--fingerprints` | 把每集逐位回执写成金标文件 | 和另一台机器/另一次运行对比 |
 | `--episodes` | 采集集数 | 演示 2 集足够；成功率不重要，可复现才重要 |
-| `--verify-determinism` | 双跑逐位复核 | 这是「回执」主张的现场证据 |
+| `--verify-determinism` | 双跑逐位复核，**必须带值**：`full` \| `sample` \| `off` | 这是「回执」主张的现场证据；`full` 是全量双跑比对 |
+| `--cam` + `--out DIR` | 额外把相机帧写成 PNG（`lerobot-v21/videos/...`） | Demo 视频里的「真实运行画面」直接来自这里 |
 
 ## 3. 你会看到什么
 
@@ -51,6 +57,19 @@ spec <preset> · robot desk_arm (2 DoF) · spec_hash <hash> · protocol_hash <ha
 ✓ 确定性复核（full）：双跑逐位一致
 ✓ 采集 2 集 · … transitions · 成功 X 集（X%）· 吞吐 … steps/s
 ```
+
+## 3.1 2026-11-19 的真实一次（Lux3D 资产 → 引擎）
+
+| 项 | 值 |
+|---|---|
+| 资产 | `crate_live.glb`（Lux3D `taskId 8390507`）→ `crate_live.stl`，14,902 面，asset `6e593a666736fce0` |
+| 导入 | `desk_arm / 2 DoF`，skipped 0 条，警告 1 条（`home` 全零） |
+| 复核 | **✓ 确定性复核（full）：双跑逐位一致** |
+| 采集 | 2 集 · 1400 transitions · 成功 0 集（0%）· 66 steps/s |
+| 落盘 | `robot.json`、`fingerprints.v2.json`（scheme v2）、`eval_report.json`、1400 张相机 PNG |
+
+成功率 0% 是如实结果：2 自由的桌面臂 + `home` 全零的 URDF 零位，够不到台面方块。
+回执一致才是这个仓库要证明的东西。
 
 拿到两份回执后，不装 cargo 也能复核：
 

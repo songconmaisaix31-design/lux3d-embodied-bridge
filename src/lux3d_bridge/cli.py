@@ -130,7 +130,13 @@ def cmd_urdf(args: argparse.Namespace) -> int:
 
 
 def cmd_bench(args: argparse.Namespace) -> int:
-    paths = bench.paths_for(args.out, args.robot_name)
+    # The engine runs with cwd=<engine checkout>, so every path we hand it must be absolute.
+    out_dir = os.path.abspath(args.out)
+    paths = bench.paths_for(out_dir, args.robot_name)
+    verify = "off" if args.skip_determinism else args.verify
+    extra = bench.split_extra(args.extra)
+    if args.cam:
+        extra += ["--cam", "--out", os.path.join(out_dir, "frames")]
     command = bench.build_command(
         engine_dir=args.engine,
         urdf_robot=paths["urdf_robot"],
@@ -139,8 +145,8 @@ def cmd_bench(args: argparse.Namespace) -> int:
         dump_robot_spec=paths["dump_robot_spec"],
         episodes=args.episodes,
         fingerprints=None if args.no_fingerprints else paths["fingerprints"],
-        verify_determinism=not args.skip_determinism,
-        extra=bench.split_extra(args.extra),
+        verify_determinism=verify,
+        extra=extra,
     )
     print("cd " + args.engine)
     print(bench.render(command))
@@ -260,7 +266,10 @@ def build_parser() -> argparse.ArgumentParser:
     bn.add_argument("--package", default="generated")
     bn.add_argument("--episodes", type=int, default=2)
     bn.add_argument("--no-fingerprints", action="store_true")
-    bn.add_argument("--skip-determinism", action="store_true")
+    bn.add_argument("--verify", default="full", choices=["full", "sample", "off"],
+                    help="--verify-determinism value the engine's CLI expects")
+    bn.add_argument("--skip-determinism", action="store_true", help="alias for --verify off")
+    bn.add_argument("--cam", action="store_true", help="also render camera PNG frames (--cam)")
     bn.add_argument("--run", action="store_true")
     bn.add_argument("--extra", action="append", default=[], help="extra flags, one string each")
     bn.set_defaults(func=cmd_bench)
