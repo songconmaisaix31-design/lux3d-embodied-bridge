@@ -135,6 +135,14 @@ design file.
 - `./demo/run_all.sh offline` reproduces the offline frames; `./demo/run_all.sh live` re-runs
   the whole chain (needs `AHOLO_API_KEY` and `ORIERA_ENGINE`).
 
+## Docs · 文档
+
+- [`docs/AHOLO-API.md`](docs/AHOLO-API.md) — Aholo Lux3D 的接入文档：网关、鉴权、信封、四个端点、
+  状态机、下载有效期、轮询参数、可直接跑的 Python，以及每一步踩过的坑。
+- [`docs/PRODUCT.md`](docs/PRODUCT.md) — 产品目标：要缝的是什么、谁会用、明确不做什么、怎么算成了、路线图。
+- [`docs/BENCH-COMMAND.md`](docs/BENCH-COMMAND.md) — 把资产交给引擎的命令、参数与两个实测坑。
+- [`docs/URDF-IMPORT.md`](docs/URDF-IMPORT.md) — 注入规则与「base 朝向」的来历。
+
 ## Honest limits · 边界，写出来不藏着
 
 - **GLB is not the bench's native format.** The upstream bench probes GLB but parses STL into a convex hull. This bridge therefore converts; a GLB handed straight to the bench degrades to a link-segment envelope. That is why the STL step exists, not as a convenience.
