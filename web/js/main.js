@@ -95,7 +95,7 @@ function renderEngine() {
   $('chip-engine').textContent = engine.ok ? 'engine ok' : 'engine —';
   $('chip-engine').className = `chip ${engine.ok ? 'ok' : 'warn'}`;
   $('btn-train').disabled = !engine.ok;
-  $('btn-train').title = engine.ok ? '' : 'start the bridge with --engine /path/to/OriEra';
+  $('btn-train').title = engine.ok ? '' : 'start the bridge with --engine /path/to/lux3D-engine';
   $('btn-prepare').disabled = !state.selected;
 }
 

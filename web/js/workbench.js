@@ -257,13 +257,13 @@ async function loadConfig() {
     const wb = cfg.workbench || {};
     state.workbenchReady = Boolean(wb.ready);
     setStatus(el.apiStatus, cfg.has_key ? '生成服务已配置' : '未配置生成密钥', cfg.has_key ? 'ok' : 'warn');
-    setStatus(el.armStatus, wb.ready ? '仿真就绪' : `仿真不可用${wb.reason ? `：${wb.reason}` : ''}`, wb.ready ? 'ok' : 'warn');
+    setStatus(el.armStatus, wb.ready ? 'lux3D-engine · 就绪' : `lux3D-engine · 不可用${wb.reason ? `：${wb.reason}` : ''}`, wb.ready ? 'ok' : 'warn');
     if (!cfg.has_key) setStatus(el.generationStatus, '服务端未配置生成密钥，暂不能生成新模型。可直接选用已有资产。', 'warn');
   } catch (err) {
     state.config = null;
     state.workbenchReady = false;
     setStatus(el.apiStatus, '服务不可达', 'error');
-    setStatus(el.armStatus, '状态未知', 'warn');
+    setStatus(el.armStatus, 'lux3D-engine · 状态未知', 'warn');
     alertWorkspace(`无法读取配置：${errText(err)}`, 'error');
   }
   updateControls();

@@ -689,7 +689,7 @@ class App:
         if not status["ok"]:
             raise ApiError(
                 f"no engine checkout configured ({status['reason']}). "
-                "Run `python bridge.py serve --engine /path/to/OriEra`, or start it with ORIERA_ENGINE set.",
+                "Run `python bridge.py serve --engine /path/to/lux3D-engine`, or start it with ORIERA_ENGINE set.",
                 409,
             )
         name = (body.get("asset") or "").strip()

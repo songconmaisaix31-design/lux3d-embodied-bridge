@@ -36,13 +36,13 @@ def engine_files(engine: str) -> tuple[Path, Path]:
 
 def readiness(engine: str) -> dict:
     if not engine:
-        return {"ready": False, "reason": "启动服务时需要指定 OriEra 引擎目录。"}
+        return {"ready": False, "reason": "启动服务时需要指定引擎目录。"}
     collector, module = engine_files(engine)
     kernel = Path(engine) / CONTACT_KERNEL
     if not collector.is_file() or not module.is_file():
-        return {"ready": False, "reason": "需要先编译 OriEra 的 release 采集程序和 Python 扩展。"}
+        return {"ready": False, "reason": "需要先编译 release 采集程序和 Python 扩展。"}
     if not all((kernel / name).is_file() for name in KERNEL_FILES):
-        return {"ready": False, "reason": "OriEra 目录缺少带接触约束的浏览器仿真模块。"}
+        return {"ready": False, "reason": "引擎目录缺少带接触约束的浏览器仿真模块。"}
     if shutil.which("node") is None:
         return {"ready": False, "reason": "独立评估需要 Node.js。"}
     if importlib.util.find_spec("torch") is None:

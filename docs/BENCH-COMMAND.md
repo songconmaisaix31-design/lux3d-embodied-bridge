@@ -6,7 +6,7 @@
 ## 1. 完整命令
 
 ```bash
-cd /path/to/OriEra                       # 引擎 checkout，不是这个仓库
+cd /path/to/lux3D-engine
 cargo run -p oriera-agent --example embodied_sim_collect \
   --features rigid3d,cam,spec,urdf -- \
   --urdf-robot  out/demo/urdf/desk_arm.urdf \
@@ -19,7 +19,7 @@ cargo run -p oriera-agent --example embodied_sim_collect \
   --cam --out /abs/path/to/out/frames
 ```
 
-`python bridge.py bench --engine /path/to/OriEra --out out/live` 会打印同一行；加 `--run`
+`python bridge.py bench --engine /path/to/lux3D-engine --out out/live` 会打印同一行；加 `--run`
 就直接执行，加 `--cam` 会额外落相机帧。
 
 > **两个坑，实测踩过**：引擎的 `cargo run` 以 `<engine>` 为工作目录，所有路径必须传

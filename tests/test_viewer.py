@@ -228,6 +228,7 @@ class HttpTests(unittest.TestCase):
         with urllib.request.urlopen(self.url("/"), timeout=10) as response:
             html = response.read().decode("utf-8")
         self.assertIn("机械臂工作台", html)
+        self.assertIn("lux3D-engine", html)
         self.assertIn("importmap", html)
         self.assertIn('id="panel-train"', html)
         with urllib.request.urlopen(self.url("/index.html"), timeout=10) as response:

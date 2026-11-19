@@ -57,7 +57,7 @@ class BrowserEngine:
         self.process.stdin.flush()
         line = self.process.stdout.readline()
         if not line:
-            raise RuntimeError("OriEra WebAssembly 评估进程提前退出。")
+            raise RuntimeError("lux3D-engine 的 WebAssembly 评估进程提前退出。")
         return json.loads(line)
 
     def reset(self, seed):
@@ -106,7 +106,7 @@ def collect(directory, collector):
                 raise
     if child.returncode:
         detail = log_path.read_text(encoding="utf-8", errors="replace").strip().splitlines()
-        raise RuntimeError("OriEra 采集失败。\n" + "\n".join(detail[-8:]))
+        raise RuntimeError("lux3D-engine 采集失败。\n" + "\n".join(detail[-8:]))
     report = read_json(target / "eval_report.json")
     if report["task_id"] != "pick_place@v2" or len(report["runs"]) != COLLECTION_EPISODES:
         raise ValueError("采集回执与场景任务不一致。")
@@ -318,7 +318,7 @@ def main():
             finally:
                 child.stdin.close()
         if child.returncode:
-            raise RuntimeError("OriEra WebAssembly 评估进程异常结束。")
+            raise RuntimeError("lux3D-engine 的 WebAssembly 评估进程异常结束。")
         successes = sum(int(item["success"]) for item in rows)
         clean = sum(item["contact"]["penetrating_frames"] == 0 for item in rows)
         write_json(directory / "policy_report.json", {

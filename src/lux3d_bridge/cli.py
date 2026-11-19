@@ -190,7 +190,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
     print(f"      link {report['link']} -> {report['mesh_uri']}")
 
     print("[3/3] bench   the command to run against an engine checkout")
-    engine = args.engine or os.environ.get("ORIERA_ENGINE") or "<path-to-OriEra-checkout>"
+    engine = args.engine or os.environ.get("ORIERA_ENGINE") or "<path-to-lux3D-engine-checkout>"
     paths = bench.paths_for(out, "desk_arm")
     command = bench.build_command(
         engine_dir=engine,
@@ -298,7 +298,7 @@ def build_parser() -> argparse.ArgumentParser:
     ur.set_defaults(func=cmd_urdf)
 
     bn = sub.add_parser("bench", help="print or run the upstream embodied_sim_collect command")
-    bn.add_argument("--engine", required=True, help="path to an OriEra checkout")
+    bn.add_argument("--engine", required=True, help="path to a lux3D-engine checkout")
     bn.add_argument("--out", default=os.path.join(REPO_ROOT, "out", "demo"))
     bn.add_argument("--robot-name", default="desk_arm")
     bn.add_argument("--package", default="generated")
@@ -338,7 +338,7 @@ def build_parser() -> argparse.ArgumentParser:
     srv.add_argument("--poll-path", default=None)
     srv.add_argument("--print-config", action="store_true", help="print the served config and exit")
     srv.add_argument("--engine", default=None,
-                     help="path to an OriEra checkout; enables the Train step (or set ORIERA_ENGINE)")
+                     help="path to a lux3D-engine checkout; enables the Train step (or set ORIERA_ENGINE)")
     srv.set_defaults(func=cmd_serve)
 
     rb = sub.add_parser("robot", help="parse a URDF and describe what the viewer draws")
