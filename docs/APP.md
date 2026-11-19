@@ -1,5 +1,7 @@
 # App · 一行 prompt → 机械臂 → 训练回执
 
+本文记录 `/index.html` 提供的末端碰撞实验。默认首页的抓放训练流程见[机械臂工作台](WORKBENCH.md)。
+
 > 一句话：这是把「文生模型」和「具身训练」焊在一起的那个应用。
 > `python bridge.py serve --engine /path/to/OriEra` 起一个本地页面，三步走完：
 > **① 文本生成资产 → ② 写进 URDF 的 tool 碰撞位 → ③ 引擎真跑一轮采集/训练 → ④ 回执可复核**。

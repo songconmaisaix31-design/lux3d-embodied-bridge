@@ -2,7 +2,9 @@
 
 [![tests](https://github.com/songconmaisaix31-design/lux3d-embodied-bridge/actions/workflows/tests.yml/badge.svg)](https://github.com/songconmaisaix31-design/lux3d-embodied-bridge/actions/workflows/tests.yml)
 
-**Aholo Lux3D 生成的资产，第一次带上可复核的回执。**
+**Aholo Lux3D 文生模型 → 机械臂抓放训练 → 独立评估与回放。**
+
+本地 Web 工作台把生成的 GLB 放到 OriEra 仿真台面上，以包围盒参与碰撞。完成示范采集和策略训练后，可加载策略评估并回放每一集。详见[机械臂工作台文档](docs/WORKBENCH.md)。
 Turn an Aholo Lux3D artifact into a deterministic embodied experiment: `GLB → STL → URDF collision mesh → per-episode fingerprint`.
 
 This repository contains **no code copied from any engine**. It is a bridge: it produces assets and descriptions, then hands a command to an engine checkout you already have.
@@ -34,16 +36,16 @@ Aholo Lux3D  ──GLB/OBJ──▶  bridge  ──STL──▶  URDF <collision
 One sentence: **the asset becomes part of the experiment's identity, not a decoration around it.**
 一句话：**资产成为实验身份的一部分，而不是实验外面的一层装饰。**
 
-## Application · 一行 prompt，到一次可训练的实验
+## URDF tool experiment · 末端碰撞实验
 
-`python bridge.py serve --engine /path/to/OriEra` 起一个本地应用，三步走完，每一步都落盘：
+`python bridge.py serve --engine /path/to/OriEra` 启动后，访问 `/index.html` 打开末端碰撞实验。每一步都落盘：
 **生成**（Lux3D 真任务 → `.glb` + `.stl` + `asset_id`）→ **训练**（资产写进 URDF 的 `tool` 碰撞位，在你的引擎
 checkout 里跑 `embodied_sim_collect --verify-determinism full --cam`，stdout 实时流进页面）→ **回执**
 （`eval_report.json` + `fingerprints.v2.json`：成功率、Wilson CI、每集 seed/steps/reward、spec_hash、相机帧）。
 
 ```bash
 python bridge.py demo                      # offline fixture, no key needed · 离线，不花钱
-python bridge.py serve --engine /path/to/OriEra   # → http://127.0.0.1:8137/
+python bridge.py serve --engine /path/to/OriEra   # → http://127.0.0.1:8137/index.html
 ```
 
 生成成功的瞬间会自动跳到训练页，并把这个资产填进碰撞位——不用再去手工敲命令。

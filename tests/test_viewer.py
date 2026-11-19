@@ -227,8 +227,12 @@ class HttpTests(unittest.TestCase):
     def test_static_index_is_served(self):
         with urllib.request.urlopen(self.url("/"), timeout=10) as response:
             html = response.read().decode("utf-8")
-        self.assertIn("LUX3D", html)
+        self.assertIn("机械臂工作台", html)
         self.assertIn("importmap", html)
+        self.assertIn('id="panel-train"', html)
+        with urllib.request.urlopen(self.url("/index.html"), timeout=10) as response:
+            html = response.read().decode("utf-8")
+        self.assertIn("LUX3D", html)
         self.assertIn("data-panel=\"train\"", html)
 
     def test_unknown_route_is_json_404(self):

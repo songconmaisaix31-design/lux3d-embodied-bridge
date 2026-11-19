@@ -25,10 +25,11 @@ import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
-from . import aholo, asset, bench, pipeline, robot, verify
+from . import aholo, asset, bench, pipeline, robot, verify, workbench
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "web")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -51,6 +52,7 @@ CONTENT_TYPES = {
     ".ico": "image/x-icon",
     ".glb": "model/gltf-binary",
     ".stl": "model/stl",
+    ".wasm": "application/wasm",
     ".txt": "text/plain; charset=utf-8",
 }
 
@@ -241,6 +243,8 @@ class Job:
         self.log: List[str] = []
         self.asset: Optional[Dict[str, Any]] = None
         self.result: Optional[Dict[str, Any]] = None
+        self.progress: Optional[Dict[str, Any]] = None
+        self.cancel_requested = False
         self.run_id: Optional[str] = config.get("run_id")
         self.command: List[str] = []
         self.payload_json: Optional[Dict[str, Any]] = None
@@ -267,6 +271,7 @@ class Job:
             "payload_json": self.payload_json,
             "asset": self.asset,
             "result": self.result,
+            "progress": self.progress,
             "run_id": self.run_id,
             "command": self.command,
             "created_at": self.created_at,
@@ -405,12 +410,18 @@ class TrainingRunner(threading.Thread):
                 encoding="utf-8",
                 errors="replace",
                 bufsize=1,
-                env={**os.environ, "CARGO_TERM_COLOR": "never"},
+                env={**os.environ, "CARGO_TERM_COLOR": "never", "PYTHONIOENCODING": "utf-8"},
             )
             job.process = process
             assert process.stdout is not None
             for raw in process.stdout:
                 line = raw.rstrip("\r\n")
+                if job.kind == "policy" and line.startswith("POLICY "):
+                    event = json.loads(line[len("POLICY "):])
+                    job.status_name = event.pop("phase")
+                    job.progress = event
+                    job.touch()
+                    continue
                 if line.strip():
                     job.log.append(line)
                     if len(job.log) > 400:
@@ -426,6 +437,8 @@ class TrainingRunner(threading.Thread):
             job.state = "failed"
             job.message = f"{type(exc).__name__}: {exc}"
             job.log.append(job.message)
+            if job.kind == "policy":
+                self._finalize(started, 1)
             return
         finally:
             job.process = None
@@ -437,14 +450,26 @@ class TrainingRunner(threading.Thread):
             job.message = f"cannot read the run artifacts back: {exc}"
             return
         if code == 0:
+            if job.kind == "policy" and not (record or {}).get("result"):
+                job.state = "failed"
+                job.message = "训练进程结束，但未写出独立评估结果。"
+                return
             job.state = "success"
             summary = (record or {}).get("result") or {}
+            if job.kind == "policy":
+                job.status_name = "completed"
+                job.message = f"独立评估完成 · {summary['successes']}/{summary['episodes']} 集抓放成功"
+                return
             job.message = (
                 f"{summary.get('successes')}/{summary.get('episodes')} episodes · "
                 f"{summary.get('protocol') or 'protocol'} · spec {(summary.get('spec_hash') or '?')[:12]}"
             )
         else:
             job.state = "failed"
+            if job.kind == "policy" and job.cancel_requested:
+                job.status_name = "cancelled"
+                job.message = "训练已取消。"
+                return
             job.message = f"engine exited {code}; last line: {self._last_line()}"
 
     def _last_line(self) -> str:
@@ -456,6 +481,23 @@ class TrainingRunner(threading.Thread):
 
     def _finalize(self, started: float, code: int) -> Optional[Dict[str, Any]]:
         job = self.job
+        if job.kind == "policy":
+            directory = Path(job.config["run_dir"])
+            record = pipeline.read_json(str(directory / "run.json"))
+            if record is None:
+                raise ValueError("训练记录无法读取。")
+            result = pipeline.read_json(str(directory / "policy_report.json")) if code == 0 else None
+            record["status"] = "done" if result is not None else ("cancelled" if job.cancel_requested else "failed")
+            record["elapsed_s"] = round(time.time() - started, 2)
+            record["exit_code"] = code
+            if result is not None:
+                record["result"] = result
+            elif not job.cancel_requested:
+                record["error"] = self._last_line()
+            workbench.save_record(directory, record)
+            job.result = record
+            job.touch()
+            return record
         try:
             record = pipeline.finalize_run(self.root, job.run_id, exit_code=code, elapsed_s=time.time() - started)
         except (OSError, ValueError) as exc:
@@ -475,7 +517,7 @@ class Jobs:
     def submit(self, payload: Dict[str, Any], config: Dict[str, Any]) -> Job:
         job = Job(payload, config)
         runner: threading.Thread
-        if job.kind == "train":
+        if job.kind in ("train", "policy"):
             runner = TrainingRunner(job, self.root)
         else:
             runner = JobRunner(job, self.root)
@@ -486,6 +528,11 @@ class Jobs:
 
     def cancel(self, job_id: str) -> bool:
         job = self.get(job_id)
+        if job is not None and job.kind == "policy" and job.state in ("queued", "running"):
+            job.cancel_requested = True
+            (Path(job.config["run_dir"]) / "cancel.requested").touch()
+            job.log.append("已请求取消训练。")
+            return True
         process = getattr(job, "process", None) if job else None
         if process is None:
             return False
@@ -532,9 +579,11 @@ class App:
         self.base_url = base_url
         self.create_path = create_path
         self.poll_path = poll_path
-        self.engine = engine or os.environ.get("ORIERA_ENGINE") or ""
+        engine_path = engine or os.environ.get("ORIERA_ENGINE")
+        self.engine = os.path.abspath(engine_path) if engine_path else ""
         self.catalog = Catalog(root, self.asset_dirs)
         self.jobs = Jobs(root)
+        self._policy_lock = threading.Lock()
 
     # -- config / robot ----------------------------------------------------
 
@@ -565,6 +614,7 @@ class App:
             "asset_dirs": self.asset_dirs,
             "gen_dir": GEN_DIR,
             "engine": self.engine_status(),
+            "workbench": workbench.readiness(self.engine),
             "task_default": pipeline.DEFAULT_TASK,
             "tasks": ["pick_place", "stack", "push"],
             "runs_dir": pipeline.RUNS_DIRNAME.replace(os.sep, "/"),
@@ -699,6 +749,53 @@ class App:
     def runs(self) -> Dict[str, Any]:
         return {"ok": True, "runs": pipeline.list_runs(self.root), "engine": self.engine_status()}
 
+    def workbench_scene(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        readiness = workbench.readiness(self.engine)
+        if not readiness["ready"]:
+            raise ApiError(readiness["reason"], 409)
+        asset_id = body.get("asset_id")
+        if not isinstance(asset_id, str) or not re.fullmatch(r"[a-f0-9]{16}", asset_id):
+            raise ApiError("请选择一个已生成的模型。")
+        entry = self.catalog.find(asset_id)
+        source = self.catalog.path_for(entry, "glb") if entry else None
+        if entry is None or source is None:
+            raise ApiError("当前模型的 GLB 文件不存在。", 404)
+        try:
+            width = float(body.get("width_mm", 50))
+            orientation = body.get("orientation", "upright")
+            if not isinstance(orientation, str):
+                raise ValueError("请选择有效的物体朝向。")
+            return {"ok": True, "run": workbench.prepare(self.root, self.engine, entry, source, width, orientation)}
+        except (TypeError, ValueError) as exc:
+            raise ApiError(str(exc), 422) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise ApiError("场景校验超时。", 504) from exc
+
+    def workbench_train(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        readiness = workbench.readiness(self.engine)
+        if not readiness["ready"]:
+            raise ApiError(readiness["reason"], 409)
+        run_id = body.get("run_id")
+        if not isinstance(run_id, str):
+            raise ApiError("请先确认场景。")
+        with self._policy_lock:
+            record = pipeline.load_run(self.root, run_id)
+            if not record or record.get("kind") != "policy" or record["id"] != run_id:
+                raise ApiError("找不到已确认的场景。", 404)
+            if record["status"] != "prepared":
+                raise ApiError("此场景已提交。重新确认场景可发起另一次训练。", 409)
+            active = self.jobs.listing()
+            if any(job["kind"] == "policy" and job["state"] in ("queued", "running") for job in active):
+                raise ApiError("已有训练正在运行。", 409)
+            directory, command = workbench.run_command(self.root, self.engine, run_id)
+            record["status"] = "running"
+            workbench.save_record(directory, record)
+            job = self.jobs.submit(body, {
+                "kind": "policy", "engine": self.engine, "command": command,
+                "run_id": run_id, "run_dir": str(directory),
+            })
+        return {"ok": True, "job": job.to_json(), "run_id": run_id}
+
     def run(self, run_id: str) -> Dict[str, Any]:
         record = pipeline.load_run(self.root, run_id)
         if record is None:
@@ -824,6 +921,26 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "job": job.to_json()})
             if path == "/api/runs":
                 return self._json(self.app.runs())
+            if path.startswith("/api/workbench/kernel/"):
+                name = path.removeprefix("/api/workbench/kernel/")
+                if name not in workbench.KERNEL_FILES or not self.app.engine:
+                    raise ApiError("找不到浏览器仿真模块。", 404)
+                source = Path(self.app.engine) / workbench.KERNEL / name
+                if not source.is_file():
+                    raise ApiError("找不到浏览器仿真模块。", 404)
+                return self._send(200, source.read_bytes(), CONTENT_TYPES[source.suffix])
+            if path.startswith("/api/workbench/runs/"):
+                parts = path.removeprefix("/api/workbench/runs/").split("/")
+                try:
+                    if len(parts) == 2 and parts[1] == "asset":
+                        source = workbench.run_artifact(self.app.root, parts[0], parts[1])
+                        return self._send(200, source.read_bytes(), CONTENT_TYPES[".glb"])
+                    if len(parts) == 3 and parts[1] == "replay":
+                        source = workbench.run_artifact(self.app.root, parts[0], parts[1], parts[2])
+                        return self._json({"ok": True, "replay": json.loads(source.read_text(encoding="utf-8"))})
+                except FileNotFoundError as exc:
+                    raise ApiError("找不到这次运行的对应产物。", 404) from exc
+                raise ApiError("找不到此路径。", 404)
             if path.startswith("/api/runs/"):
                 parts = path[len("/api/runs/"):].split("/")
                 if len(parts) == 1:
@@ -853,6 +970,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self.app.prepare(self._body()))
             if parsed.path == "/api/train":
                 return self._json(self.app.train(self._body()), 202)
+            if parsed.path == "/api/workbench/scene":
+                return self._json(self.app.workbench_scene(self._body()), 201)
+            if parsed.path == "/api/workbench/train":
+                return self._json(self.app.workbench_train(self._body()), 202)
             if parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/cancel"):
                 job_id = parsed.path[len("/api/jobs/"): -len("/cancel")]
                 if not self.app.jobs.cancel(job_id):
@@ -880,7 +1001,7 @@ class Handler(BaseHTTPRequestHandler):
     # -- static files ------------------------------------------------------
 
     def _static(self, path: str) -> None:
-        relative = "index.html" if path in ("", "/") else path.lstrip("/")
+        relative = "workbench.html" if path in ("", "/") else path.lstrip("/")
         target = os.path.realpath(os.path.join(WEB_DIR, relative))
         web_root = os.path.realpath(WEB_DIR)
         if os.path.commonpath([web_root, target]) != web_root or not os.path.isfile(target):
