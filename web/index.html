@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lux3D × OriEra · WebGL Viewer</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d1117'/%3E%3Crect x='8' y='9' width='16' height='14' rx='2' fill='none' stroke='%23ff7a3d' stroke-width='2'/%3E%3Cpath d='M8 14h16M14 9v14' stroke='%23ff7a3d' stroke-width='2'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="./style.css" />
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.js",
+    "three/addons/": "./vendor/addons/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app">
+
+  <header class="bar">
+    <div class="brand">
+      <span class="dot" id="server-dot" title="bridge server"></span>
+      <strong>LUX3D&nbsp;×&nbsp;ORIERA</strong>
+      <span class="sep">/</span>
+      <span class="muted">WebGL viewer · 实机与它的生成资产</span>
+    </div>
+    <div class="bar-right">
+      <span class="chip" id="chip-robot">robot —</span>
+      <span class="chip" id="chip-assets">assets —</span>
+      <span class="chip" id="chip-key">key —</span>
+    </div>
+  </header>
+
+  <aside class="panel left">
+    <section>
+      <h2>Assets <span class="hint">/ 资产</span></h2>
+      <div id="asset-list" class="asset-list">
+        <p class="empty">loading…</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Robot <span class="hint">/ 机械臂</span></h2>
+      <div id="joints" class="joints"></div>
+      <div class="row">
+        <button id="btn-home" class="ghost" type="button">home</button>
+        <button id="btn-play" class="ghost" type="button">演示动作</button>
+      </div>
+      <p class="note" id="robot-note">kinematic preview only · 仅运动学示意，不是物理仿真</p>
+    </section>
+
+    <section>
+      <h2>View <span class="hint">/ 视图</span></h2>
+      <label class="check"><input type="checkbox" id="toggle-collision" /> 碰撞壳 <span class="mono">STL</span></label>
+      <label class="check"><input type="checkbox" id="toggle-bbox" /> 包围盒 <span class="mono">bbox</span></label>
+      <label class="check"><input type="checkbox" id="toggle-wire" /> 线框 <span class="mono">wire</span></label>
+      <label class="check"><input type="checkbox" id="toggle-spin" /> 自动旋转 <span class="mono">orbit</span></label>
+    </section>
+  </aside>
+
+  <main class="stage">
+    <canvas id="view"></canvas>
+    <div class="stage-top">
+      <span class="tag" id="stage-asset">no asset</span>
+      <span class="tag" id="stage-tcp">TCP —</span>
+    </div>
+    <p class="caption">
+      Arm geometry parsed from <code id="urdf-source">fixtures/desk_arm.urdf</code>; the object is the Lux3D <code>.glb</code>,
+      the translucent shell is the <code>.stl</code> the bench collides with.
+      <br />机械臂几何来自仓库里的 URDF；物体是 Lux3D 的 <code>.glb</code>，半透明外壳是仿真台真正用于碰撞的 <code>.stl</code>。
+    </p>
+  </main>
+
+  <aside class="panel right">
+    <section>
+      <h2>Identity <span class="hint">/ 身份</span></h2>
+      <div id="identity" class="kv"><p class="empty">select an asset</p></div>
+    </section>
+
+    <section>
+      <h2>Receipt <span class="hint">/ 回执</span></h2>
+      <div id="receipt" class="kv"><p class="empty">no receipt found</p></div>
+    </section>
+
+    <section>
+      <h2>Generate <span class="hint">/ 生成</span></h2>
+      <form id="gen-form" autocomplete="off">
+        <label class="field">
+          <span>prompt</span>
+          <textarea id="gen-prompt" rows="2" placeholder="a small wooden shipping crate with metal corner brackets, single object, centered"></textarea>
+        </label>
+        <div class="grid2">
+          <label class="field">
+            <span>version</span>
+            <select id="gen-version">
+              <option>G1-Turbo</option>
+              <option>G1</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>faceCount</span>
+            <input id="gen-faces" type="number" min="10000" max="300000" step="1000" value="20000" />
+          </label>
+          <label class="field">
+            <span>style</span>
+            <select id="gen-style">
+              <option value="">service default</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>name</span>
+            <input id="gen-name" value="crate_web" pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,39}" />
+          </label>
+        </div>
+        <label class="check"><input type="checkbox" id="gen-dry" checked /> dry-run <span class="hint">不花钱、只校验请求体</span></label>
+        <button id="btn-generate" class="primary" type="submit">Generate</button>
+      </form>
+      <pre id="job-log" class="job-log" aria-live="polite"></pre>
+    </section>
+  </aside>
+
+</div>
+
+<div id="offline" class="offline" hidden>
+  <div class="offline-card">
+    <h3>API server not running</h3>
+    <p>This page needs the local bridge (it serves the robot description, the artifacts and the Lux3D call).</p>
+    <pre>python bridge.py serve</pre>
+    <p class="muted">then open <code>http://127.0.0.1:8137/</code> · 页面需要本地服务，先跑上面这条命令。</p>
+  </div>
+</div>
+
+<script type="module" src="./js/main.js"></script>
+</body>
+</html>

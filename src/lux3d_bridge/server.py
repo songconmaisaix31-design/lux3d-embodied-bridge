@@ -1,0 +1,643 @@
+"""Local HTTP bridge for the WebGL viewer.
+
+One process does three jobs, all of them on 127.0.0.1 by default:
+
+1. **serves the page** in ``web/`` (static files, no build step);
+2. **serves the artifacts** the page draws - the Lux3D ``.glb`` and the
+   converted ``.stl`` - plus the robot description and the receipts;
+3. **runs one Lux3D generation at a time** on request, so the viewer's
+   "generate" button is a real API call rather than a mock-up.
+
+The API is deliberately boring JSON: every response carries ``ok``; errors
+carry ``error``. Nothing here retries a business error, and a failed job keeps
+its message instead of degrading into an empty asset.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import io
+import json
+import os
+import re
+import threading
+import time
+import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import parse_qs, unquote, urlparse
+
+from . import aholo, asset, robot, verify
+
+WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "web")
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+DEFAULT_ASSET_DIRS = ("out/live", "out/demo/meshes", "out/webgen/meshes")
+GEN_DIR = "out/webgen"
+MAX_BODY = 64 * 1024
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$")
+FACE_RANGE = (10000, 300000)
+
+CONTENT_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".mjs": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".ico": "image/x-icon",
+    ".glb": "model/gltf-binary",
+    ".stl": "model/stl",
+    ".txt": "text/plain; charset=utf-8",
+}
+
+
+class ApiError(Exception):
+    """A request-level failure that becomes a JSON error, never a stack trace."""
+
+    def __init__(self, message: str, status: int = 400) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+# ── artifacts on disk ────────────────────────────────────────────────────────
+
+
+class Catalog:
+    """The assets a reviewer can load: every ``assets.lock.json`` under the repo.
+
+    A lock entry names its source GLB by basename, but a real Lux3D download is
+    named after its task (``lux3d_task8389570_0.glb``). Resolution therefore
+    falls back to the task id recorded in ``provenance`` and finally to a
+    sha256 match, so identity - not the file name - decides what is served.
+    """
+
+    def __init__(self, root: str, dirs: List[str]) -> None:
+        self.root = root
+        self.dirs = dirs
+        self._hashes: Dict[Tuple[str, float, int], str] = {}
+
+    def _abs(self, relative: str) -> str:
+        return os.path.join(self.root, relative)
+
+    def _sha256(self, path: str) -> str:
+        stat = os.stat(path)
+        key = (path, stat.st_mtime, stat.st_size)
+        cached = self._hashes.get(key)
+        if cached is None:
+            cached = asset.sha256_file(path)
+            self._hashes[key] = cached
+        return cached
+
+    def _candidate_dirs(self, directory: str) -> List[str]:
+        """Where a lock entry's source GLB may actually live.
+
+        The CLI downloads to ``out/assets`` and some runs keep the raw task file
+        next to the lock; the fixture sits in ``fixtures/``. All three are
+        legitimate places for the bytes the manifest hashed.
+        """
+        parent = os.path.dirname(directory)
+        dirs = [directory, os.path.join(directory, "assets"), os.path.join(parent, "assets"), parent, os.path.join(self.root, "fixtures")]
+        seen: List[str] = []
+        for candidate in dirs:
+            if os.path.isdir(candidate) and candidate not in seen:
+                seen.append(candidate)
+        return seen
+
+    def _resolve_glb(self, directory: str, entry: Dict[str, Any]) -> Optional[str]:
+        candidates = self._candidate_dirs(directory)
+        source = entry.get("source_file")
+        if source:
+            for candidate in candidates:
+                direct = os.path.join(candidate, source)
+                if os.path.isfile(direct):
+                    return direct
+        task_id = (entry.get("provenance") or {}).get("task_id")
+        if task_id:
+            for candidate in candidates:
+                for name in sorted(os.listdir(candidate)):
+                    if str(task_id) in name and name.lower().endswith(".glb"):
+                        return os.path.join(candidate, name)
+        wanted = entry.get("source_sha256")
+        if wanted:
+            for candidate in candidates:
+                for name in sorted(os.listdir(candidate)):
+                    if not name.lower().endswith(".glb"):
+                        continue
+                    path = os.path.join(candidate, name)
+                    if self._sha256(path) == wanted:
+                        return path
+        return None
+
+    def entries(self) -> List[Dict[str, Any]]:
+        records: List[Dict[str, Any]] = []
+        for relative in self.dirs:
+            directory = self._abs(relative)
+            manifest_path = os.path.join(directory, "assets.lock.json")
+            if not os.path.isfile(manifest_path):
+                continue
+            try:
+                with open(manifest_path, "r", encoding="utf-8") as handle:
+                    manifest = json.load(handle)
+            except (OSError, json.JSONDecodeError) as exc:
+                records.append({"name": os.path.basename(directory), "dir": relative, "error": str(exc)})
+                continue
+            for name, entry in sorted(manifest.get("assets", {}).items()):
+                record = dict(entry)
+                record["dir"] = relative
+                record["manifest"] = os.path.join(relative, "assets.lock.json").replace(os.sep, "/")
+                glb = self._resolve_glb(directory, entry)
+                stl = os.path.join(directory, entry.get("stl_file") or "")
+                record["has_glb"] = bool(glb)
+                record["glb_file"] = os.path.basename(glb) if glb else None
+                record["has_stl"] = bool(entry.get("stl_file")) and os.path.isfile(stl)
+                record["glb_bytes"] = os.path.getsize(glb) if glb else 0
+                record["stl_bytes"] = os.path.getsize(stl) if record["has_stl"] else 0
+                records.append(record)
+        return records
+
+    def find(self, name: str) -> Optional[Dict[str, Any]]:
+        for record in self.entries():
+            if record.get("name") == name or record.get("asset_id") == name:
+                return record
+        return None
+
+    def path_for(self, record: Dict[str, Any], kind: str) -> Optional[str]:
+        directory = self._abs(record["dir"])
+        if kind == "glb":
+            return self._resolve_glb(directory, record)
+        if kind == "stl":
+            candidate = os.path.join(directory, record.get("stl_file") or "")
+            return candidate if os.path.isfile(candidate) else None
+        return None
+
+
+def receipts(root: str, dirs: List[str]) -> Dict[str, Any]:
+    """Every receipt file we can find, plus the first divergent path between a pair."""
+    items: List[Dict[str, Any]] = []
+    for relative in dirs:
+        directory = os.path.join(root, relative)
+        if not os.path.isdir(directory):
+            continue
+        for name in sorted(os.listdir(directory)):
+            if "fingerprint" not in name.lower() or not name.endswith(".json"):
+                continue
+            path = os.path.join(directory, name)
+            try:
+                with open(path, "r", encoding="utf-8") as handle:
+                    payload = json.load(handle)
+            except (OSError, json.JSONDecodeError) as exc:
+                items.append({"file": f"{relative}/{name}", "error": str(exc)})
+                continue
+            fingerprints = payload.get("fingerprints") or {}
+            items.append(
+                {
+                    "file": f"{relative}/{name}",
+                    "scheme": payload.get("scheme"),
+                    "spec_hash": payload.get("spec_hash"),
+                    "protocol_id": payload.get("protocol_id"),
+                    "protocol_parameter_hash": payload.get("protocol_parameter_hash"),
+                    "engine_commit": (payload.get("engine_commit") or "")[:12],
+                    "successes": payload.get("successes"),
+                    "success_rate": payload.get("success_rate"),
+                    "transitions": payload.get("transitions"),
+                    "episodes": len(fingerprints.get("episode_fingerprints_v2") or []),
+                    "command": payload.get("command"),
+                }
+            )
+    pairs: List[Dict[str, Any]] = []
+    for left in items:
+        for right in items:
+            if left is right or left.get("error") or right.get("error"):
+                continue
+            if left["file"] >= right["file"]:
+                continue
+            if left.get("spec_hash") != right.get("spec_hash"):
+                continue
+            same, where = verify.compare_files(
+                os.path.join(root, left["file"]), os.path.join(root, right["file"])
+            )
+            pairs.append({"left": left["file"], "right": right["file"], "match": same, "first_difference": None if same else where})
+    return {"receipts": items, "pairs": pairs}
+
+
+# ── generation jobs ─────────────────────────────────────────────────────────
+
+
+class Job:
+    def __init__(self, payload: Dict[str, Any], config: Dict[str, Any]) -> None:
+        self.id = uuid.uuid4().hex[:12]
+        self.payload = payload
+        self.config = config
+        self.state = "queued"          # queued | running | success | failed
+        self.task_id: Optional[str] = None
+        self.task_status: Any = None   # the Lux3D integer, verbatim
+        self.status_name = "queued"
+        self.message = ""
+        self.log: List[str] = []
+        self.asset: Optional[Dict[str, Any]] = None
+        self.payload_json: Optional[Dict[str, Any]] = None
+        self.created_at = time.time()
+        self.updated_at = self.created_at
+        self.dry_run = bool(payload.get("dry_run"))
+
+    def touch(self) -> None:
+        self.updated_at = time.time()
+
+    def to_json(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "state": self.state,
+            "dry_run": self.dry_run,
+            "task_id": self.task_id,
+            "task_status": self.task_status,
+            "status_name": self.status_name,
+            "message": self.message,
+            "log": self.log[-40:],
+            "payload": self.payload,
+            "payload_json": self.payload_json,
+            "asset": self.asset,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+class JobRunner(threading.Thread):
+    """Runs one Lux3D task, recording every status transition for the page."""
+
+    def __init__(self, job: Job, root: str) -> None:
+        super().__init__(daemon=True)
+        self.job = job
+        self.root = root
+
+    def _log(self, text: str) -> None:
+        for line in text.splitlines():
+            if line.strip():
+                self.job.log.append(line.strip())
+        self.job.touch()
+
+    def run(self) -> None:  # noqa: C901 - the sequence is the point
+        job, config = self.job, self.job.config
+        payload = config["payload"]
+        job.state = "running"
+        buffer = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buffer):
+                if job.dry_run:
+                    aholo.create_task(
+                        config["profile"], config["key"], payload, config["mode"],
+                        base_url=config["base_url"], create_path=config["create_path"],
+                        dry_run=True,
+                    )
+                    job.payload_json = payload
+                    job.status_name = "dry-run"
+                    job.state = "success"
+                    job.message = "dry-run: request body printed, nothing was sent"
+                    return
+                task_id = aholo.create_task(
+                    config["profile"], config["key"], payload, config["mode"],
+                    base_url=config["base_url"], create_path=config["create_path"],
+                )
+                job.task_id = task_id
+                job.status_name = "init"
+                url = self._poll(task_id)
+                path = aholo.download(url, config["assets_out"], config["name"], overwrite=True)
+                job.log.append(f"downloaded {os.path.basename(path)}")
+                entry = asset.ingest(
+                    path,
+                    config["name"],
+                    config["mesh_out"],
+                    manifest_path=os.path.join(config["mesh_out"], "assets.lock.json"),
+                    provenance={
+                        "tool": "Aholo Lux3D",
+                        "profile": config["profile"],
+                        "mode": config["mode"],
+                        "version": payload.get("version"),
+                        "task_id": task_id,
+                        "source_url": url,
+                        "via": "webgl-viewer",
+                    },
+                )
+                job.asset = entry
+                job.state = "success"
+                job.message = asset.describe(entry)
+        except aholo.AholoError as exc:
+            job.state = "failed"
+            job.message = str(exc)
+        except (OSError, ValueError) as exc:
+            job.state = "failed"
+            job.message = f"{type(exc).__name__}: {exc}"
+        finally:
+            self._log(buffer.getvalue())
+
+    def _poll(self, task_id: str) -> str:
+        job, config = self.job, self.job.config
+        deadline = time.time() + config["max_wait"]
+        wanted = aholo.FORMAT_EXT.get(config["format"], ".glb")
+        last_name = None
+        while time.time() < deadline:
+            task = aholo.fetch_task(
+                config["profile"], config["key"], task_id,
+                base_url=config["base_url"], poll_path=config["poll_path"],
+            )
+            status = aholo.status_of(task)
+            job.task_status = status
+            job.status_name = aholo.status_name(status)
+            if job.status_name != last_name:
+                job.log.append(f"status: {job.status_name}")
+                last_name = job.status_name
+            job.touch()
+            if isinstance(status, int) and status in aholo.SUCCESS_STATES:
+                url = aholo.pick_output(aholo.output_urls(task), wanted)
+                if not url:
+                    raise aholo.AholoError(f"task {task_id} succeeded without outputs")
+                return url
+            if isinstance(status, int) and status in aholo.FAILURE_STATES:
+                reason = aholo.error_of(task)
+                raise aholo.AholoError(f"task {task_id} ended {job.status_name}: {reason or 'no reason given'}")
+            time.sleep(config["interval"])
+        raise aholo.AholoError(f"task {task_id} produced no artifact within {config['max_wait']}s")
+
+
+class Jobs:
+    def __init__(self, root: str) -> None:
+        self.root = root
+        self._lock = threading.Lock()
+        self._jobs: Dict[str, Job] = {}
+
+    def submit(self, payload: Dict[str, Any], config: Dict[str, Any]) -> Job:
+        job = Job(payload, config)
+        runner = JobRunner(job, self.root)
+        with self._lock:
+            self._jobs[job.id] = job
+        runner.start()
+        return job
+
+    def get(self, job_id: str) -> Optional[Job]:
+        with self._lock:
+            return self._jobs.get(job_id)
+
+    def listing(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            jobs = list(self._jobs.values())
+        return [job.to_json() for job in sorted(jobs, key=lambda item: item.created_at, reverse=True)]
+
+
+# ── the app ─────────────────────────────────────────────────────────────────
+
+
+class App:
+    def __init__(
+        self,
+        root: str = REPO_ROOT,
+        asset_dirs: Optional[List[str]] = None,
+        profile: str = "global",
+        key: str = "",
+        urdf_path: str = "fixtures/desk_arm.urdf",
+        interval: int = 10,
+        max_wait: int = 1800,
+        base_url: Optional[str] = None,
+        create_path: Optional[str] = None,
+        poll_path: Optional[str] = None,
+    ) -> None:
+        aholo.load_env_file(os.path.join(root, ".env"))
+        self.root = root
+        self.asset_dirs = list(asset_dirs or DEFAULT_ASSET_DIRS)
+        self.profile = profile
+        self.key = key or os.environ.get("AHOLO_API_KEY", "")
+        self.urdf_path = urdf_path
+        self.interval = interval
+        self.max_wait = max_wait
+        self.base_url = base_url
+        self.create_path = create_path
+        self.poll_path = poll_path
+        self.catalog = Catalog(root, self.asset_dirs)
+        self.jobs = Jobs(root)
+
+    # -- config / robot ----------------------------------------------------
+
+    def config(self) -> Dict[str, Any]:
+        conf = aholo.PROFILES[self.profile]
+        return {
+            "ok": True,
+            "profile": self.profile,
+            "has_key": bool(self.key),
+            "auth": "Authorization: <key> (no Bearer)",
+            "gateway": self.base_url or conf["base"],
+            "mode": "text-to-3d",
+            "versions": ["G1", "G1-Turbo"],
+            "styles": list(aholo.STYLES),
+            "face_range": list(FACE_RANGE),
+            "urdf": self.urdf_path,
+            "asset_dirs": self.asset_dirs,
+            "gen_dir": GEN_DIR,
+        }
+
+    def robot_model(self, requested: Optional[str]) -> Dict[str, Any]:
+        path = requested or self.urdf_path
+        absolute = self._inside(path)
+        model = robot.parse_urdf(absolute)
+        model["ok"] = True
+        model["summary"] = robot.summary(model)
+        return model
+
+    def _inside(self, relative: str) -> str:
+        """Resolve a repo-relative path and refuse anything outside the repo."""
+        target = os.path.realpath(os.path.join(self.root, relative))
+        root = os.path.realpath(self.root)
+        if os.path.commonpath([root, target]) != root:
+            raise ApiError(f"path {relative!r} escapes the repository", 403)
+        return target
+
+    # -- catalog -----------------------------------------------------------
+
+    def assets(self) -> Dict[str, Any]:
+        listing = self.catalog.entries()
+        found = receipts(self.root, self.asset_dirs)
+        return {"ok": True, "assets": listing, "receipts": found["receipts"], "pairs": found["pairs"]}
+
+    def asset_bytes(self, name: str, kind: str) -> Tuple[str, str]:
+        record = self.catalog.find(name)
+        if record is None:
+            raise ApiError(f"no asset named {name!r}", 404)
+        path = self.catalog.path_for(record, kind)
+        if path is None:
+            raise ApiError(f"asset {name!r} has no {kind.upper()} on disk", 404)
+        return path, CONTENT_TYPES.get(os.path.splitext(path)[1].lower(), "application/octet-stream")
+
+    # -- generation --------------------------------------------------------
+
+    def generate(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        mode = body.get("mode") or "text-to-3d"
+        if mode not in aholo.MODES:
+            raise ApiError(f"mode must be one of {aholo.MODES}")
+        prompt = (body.get("prompt") or "").strip()
+        if mode == "text-to-3d" and not prompt:
+            raise ApiError("prompt is required for text-to-3d")
+        version = body.get("version") or "G1-Turbo"
+        if version not in ("G1", "G1-Turbo"):
+            raise ApiError("version must be G1 or G1-Turbo")
+        face_count = int(body.get("face_count") or 20000)
+        if not FACE_RANGE[0] <= face_count <= FACE_RANGE[1]:
+            raise ApiError(f"face_count must be inside {FACE_RANGE[0]}..{FACE_RANGE[1]}")
+        style = body.get("style") or None
+        if style is not None and style not in aholo.STYLES:
+            raise ApiError(f"style must be one of {list(aholo.STYLES)}")
+        name = (body.get("name") or "lux3d").strip()
+        if not NAME_RE.match(name):
+            raise ApiError("name must match [A-Za-z0-9][A-Za-z0-9_-]{0,39}")
+        dry_run = bool(body.get("dry_run"))
+        if not dry_run and not self.key:
+            raise ApiError("no AHOLO_API_KEY: put it in .env, or tick dry-run", 409)
+
+        gen_root = os.path.join(self.root, GEN_DIR)
+        config = {
+            "profile": self.profile,
+            "key": self.key,
+            "mode": mode,
+            "name": name,
+            "interval": max(0, int(body.get("interval") or self.interval)),
+            "max_wait": max(30, int(body.get("max_wait") or self.max_wait)),
+            "base_url": self.base_url,
+            "create_path": self.create_path,
+            "poll_path": self.poll_path,
+            "assets_out": os.path.join(gen_root, "assets"),
+            "mesh_out": os.path.join(gen_root, "meshes"),
+            "format": body.get("format") or "glb",
+            "payload": aholo.default_payload(
+                prompt, body.get("image_url"), version, face_count,
+                body.get("format") or "glb", bool(body.get("pbr", True)), style,
+            ),
+        }
+        job = self.jobs.submit(body, config)
+        return {"ok": True, "job": job.to_json()}
+
+
+# ── HTTP plumbing ───────────────────────────────────────────────────────────
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "lux3d-bridge/0.3"
+    protocol_version = "HTTP/1.1"
+
+    @property
+    def app(self) -> App:
+        return self.server.app  # type: ignore[attr-defined]
+
+    def log_message(self, fmt: str, *args: Any) -> None:  # no noisy default log
+        return
+
+    # -- responses ---------------------------------------------------------
+
+    def _send(self, status: int, body: bytes, content_type: str, extra: Optional[Dict[str, str]] = None) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store" if content_type.startswith("application/json") else "no-cache")
+        for key, value in (extra or {}).items():
+            self.send_header(key, value)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _json(self, payload: Dict[str, Any], status: int = 200) -> None:
+        self._send(status, json.dumps(payload, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
+
+    def _error(self, message: str, status: int = 400) -> None:
+        self._json({"ok": False, "error": message}, status)
+
+    # -- routing -----------------------------------------------------------
+
+    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        parsed = urlparse(self.path)
+        path = unquote(parsed.path)
+        query = parse_qs(parsed.query)
+        try:
+            if path == "/healthz":
+                return self._send(200, b"ok\n", "text/plain; charset=utf-8")
+            if path == "/api/config":
+                return self._json(self.app.config())
+            if path == "/api/robot":
+                return self._json(self.app.robot_model((query.get("path") or [None])[0]))
+            if path == "/api/assets":
+                return self._json(self.app.assets())
+            if path.startswith("/api/asset/"):
+                name = path[len("/api/asset/"):]
+                kind = (query.get("kind") or ["glb"])[0].lower()
+                if kind not in ("glb", "stl"):
+                    raise ApiError("kind must be glb or stl")
+                file_path, content_type = self.app.asset_bytes(name, kind)
+                with open(file_path, "rb") as handle:
+                    return self._send(200, handle.read(), content_type)
+            if path == "/api/jobs":
+                return self._json({"ok": True, "jobs": self.app.jobs.listing()})
+            if path.startswith("/api/jobs/"):
+                job = self.app.jobs.get(path[len("/api/jobs/"):])
+                if job is None:
+                    raise ApiError("no such job", 404)
+                return self._json({"ok": True, "job": job.to_json()})
+            return self._static(path)
+        except ApiError as exc:
+            return self._error(str(exc), exc.status)
+        except robot.UrdfError as exc:
+            return self._error(str(exc), 422)
+        except (OSError, ValueError) as exc:
+            return self._error(f"{type(exc).__name__}: {exc}", 500)
+
+    def do_HEAD(self) -> None:  # noqa: N802
+        return self.do_GET()
+
+    def do_POST(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        try:
+            if parsed.path == "/api/generate":
+                length = int(self.headers.get("Content-Length") or 0)
+                if length > MAX_BODY:
+                    raise ApiError("request body too large", 413)
+                raw = self.rfile.read(length) if length else b"{}"
+                try:
+                    body = json.loads(raw or b"{}")
+                except json.JSONDecodeError as exc:
+                    raise ApiError(f"body is not JSON: {exc}") from exc
+                if not isinstance(body, dict):
+                    raise ApiError("body must be a JSON object")
+                return self._json(self.app.generate(body), 202)
+            raise ApiError(f"no POST route {parsed.path}", 404)
+        except ApiError as exc:
+            return self._error(str(exc), exc.status)
+
+    # -- static files ------------------------------------------------------
+
+    def _static(self, path: str) -> None:
+        relative = "index.html" if path in ("", "/") else path.lstrip("/")
+        target = os.path.realpath(os.path.join(WEB_DIR, relative))
+        web_root = os.path.realpath(WEB_DIR)
+        if os.path.commonpath([web_root, target]) != web_root or not os.path.isfile(target):
+            raise ApiError(f"not found: {path}", 404)
+        content_type = CONTENT_TYPES.get(os.path.splitext(target)[1].lower(), "application/octet-stream")
+        with open(target, "rb") as handle:
+            self._send(200, handle.read(), content_type)
+
+
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, address: Tuple[str, int], app: App) -> None:
+        super().__init__(address, Handler)
+        self.app = app
+
+
+def serve(app: App, host: str = "127.0.0.1", port: int = 8137) -> None:
+    server = Server((host, port), app)
+    print(f"lux3d bridge viewer  http://{host}:{server.server_address[1]}/")
+    print(f"  assets   {', '.join(app.asset_dirs)}")
+    print(f"  gateway  {app.config()['gateway']}  key {'present' if app.key else 'missing'}")
+    print("  Ctrl-C to stop")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nstopped")
+    finally:
+        server.server_close()

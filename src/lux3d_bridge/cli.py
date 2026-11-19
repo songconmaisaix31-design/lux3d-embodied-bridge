@@ -13,7 +13,7 @@ import os
 import sys
 from typing import Any, Dict, List
 
-from . import aholo, asset, bench, urdf, verify
+from . import aholo, asset, bench, robot, server, urdf, verify
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 FIXTURES = os.path.join(REPO_ROOT, "fixtures")
@@ -208,6 +208,43 @@ def cmd_demo(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    """Serve the WebGL viewer, the artifacts and one Lux3D job at a time."""
+    aholo.load_env_file(os.path.join(REPO_ROOT, ".env"))
+    key = args.key or os.environ.get("AHOLO_API_KEY", "")
+    app = server.App(
+        root=REPO_ROOT,
+        asset_dirs=args.assets or None,
+        profile=args.profile,
+        key=key,
+        urdf_path=args.urdf,
+        interval=args.interval,
+        max_wait=args.max_wait,
+        base_url=args.base_url,
+        create_path=args.create_path,
+        poll_path=args.poll_path,
+    )
+    if args.print_config:
+        print(json.dumps(app.config(), indent=2, ensure_ascii=False))
+        return 0
+    try:
+        server.serve(app, host=args.host, port=args.port)
+    except OSError as exc:
+        raise SystemExit(f"cannot listen on {args.host}:{args.port}: {exc}") from exc
+    return 0
+
+
+def cmd_robot(args: argparse.Namespace) -> int:
+    """Print the parsed robot model the viewer draws (useful for reviews)."""
+    model = robot.parse_urdf(os.path.abspath(args.urdf))
+    print(robot.summary(model))
+    for warning in model["warnings"]:
+        print(f"  warning: {warning}")
+    if args.json:
+        print(json.dumps(model, indent=2, ensure_ascii=False))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bridge",
@@ -283,6 +320,28 @@ def build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--engine", default=None)
     demo.add_argument("--link", default="tool")
     demo.set_defaults(func=cmd_demo)
+
+    srv = sub.add_parser("serve", help="serve the WebGL viewer and its API on localhost")
+    srv.add_argument("--host", default="127.0.0.1", help="bind address; localhost by default")
+    srv.add_argument("--port", type=int, default=8137)
+    srv.add_argument("--profile", choices=sorted(aholo.PROFILES), default="global")
+    srv.add_argument("--urdf", default=os.path.join("fixtures", "desk_arm.urdf"),
+                     help="robot description the viewer draws (repo-relative)")
+    srv.add_argument("--assets", action="append", default=None,
+                     help="asset directory with assets.lock.json (repeatable; default out/live + out/demo/meshes)")
+    srv.add_argument("--interval", type=int, default=10, help="poll interval seconds")
+    srv.add_argument("--max-wait", type=int, default=1800)
+    srv.add_argument("--key", default=None)
+    srv.add_argument("--base-url", default=None)
+    srv.add_argument("--create-path", default=None)
+    srv.add_argument("--poll-path", default=None)
+    srv.add_argument("--print-config", action="store_true", help="print the served config and exit")
+    srv.set_defaults(func=cmd_serve)
+
+    rb = sub.add_parser("robot", help="parse a URDF and describe what the viewer draws")
+    rb.add_argument("urdf", nargs="?", default=os.path.join(FIXTURES, "desk_arm.urdf"))
+    rb.add_argument("--json", action="store_true")
+    rb.set_defaults(func=cmd_robot)
 
     return parser
 

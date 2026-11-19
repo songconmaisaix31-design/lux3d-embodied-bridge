@@ -62,7 +62,11 @@
 - `asset_id` 记录的是 Lux3D 返回字节的 sha256，因此「这个实验用的是哪次生成」可以被
   第三方复核。
 - 未使用 Aholo Viewer，也没有用 3DGS 产物：这条链路要的是**可解析的网格**，不是可看的高斯点。
-  如果接 Viewer，正确的说法应该是「同一次重建，既看又算」——本作品先把「算」这一半做实了。
+  这一半现在有了浏览器版本：`python bridge.py serve` 起一个 WebGL 页面，机械臂从 URDF 解析，
+  物体是同一份 GLB，叠上去的碰撞壳是同一份 STL，右栏是这条链的回执；页面上的 Generate
+  会真调 Lux3D（`POST /api/generate` → 建任务 → 轮询 → 下载 → 入账）。真跑过一单：
+  `taskId 8396881`，G1-Turbo，`faceCount` 10000 → 7,290 面，`asset_id 55d204cf9851ca74`。
+  如果接 3DGS，正确的说法仍然是「同一次重建，既看又算」——本作品把「看」和「算」都指向同一份资产。
 
 ![assets.lock.json](../demo/shots/05a_import.png)
 
@@ -114,9 +118,12 @@
 
 已验证（本机实测）：
 
-- `python -m unittest discover -s tests -v` → **17 个用例通过**（GitHub Actions 在 Ubuntu 3.10 / 3.13
-  与 Windows 3.13 上各跑一遍，全绿）；
+- `python -m unittest discover -s tests -v` → **38 个用例通过**（GitHub Actions 在 Ubuntu 3.10 / 3.13
+  与 Windows 3.13 上各跑一遍，全绿；其中 21 条是 WebGL viewer 的 URDF 解析、API 路由、
+  dry-run job 与 HTTP 层测试）；
 - `python bridge.py demo` → 写出 `crate.stl`、`desk_arm.urdf`、`assets.lock.json`；
+- `python bridge.py serve` → 浏览器里画出 URDF 机械臂 + Lux3D 的 GLB + 碰撞 STL；
+  页面上的 Generate 走真实 Lux3D（真跑过 `taskId 8396881`，7,290 面，`asset_id 55d204cf9851ca74`）；
 - 注入后的 URDF 能回读解析（写坏在写入时失败，不留给仿真）。
 
 复现步骤：

@@ -240,6 +240,26 @@ def fetch_task(
     return unwrap(_request("GET", template.format(task_id=task_id), key, conf["auth"], 60))
 
 
+def status_of(task: Any) -> Any:
+    """The status carried by a task payload. It is an **integer**, not a string.
+
+    Some SDK builds hand back ``"success"``; this returns whatever is there and
+    leaves normalisation to :func:`status_name`.
+    """
+    return _find(task, ("status", "state", "taskStatus")) if isinstance(task, dict) else None
+
+
+def error_of(task: Any) -> str:
+    """Human-readable reason a failed task carries, or an empty string."""
+    if not isinstance(task, dict):
+        return ""
+    for key in ("message", "msg", "error", "reason", "errorMessage"):
+        value = task.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def wait_for_artifact(
     profile: str,
     key: str,
@@ -254,7 +274,7 @@ def wait_for_artifact(
     last = None
     while time.time() < deadline:
         task = fetch_task(profile, key, task_id, base_url=base_url, poll_path=poll_path)
-        status = _find(task, ("status", "state", "taskStatus")) if isinstance(task, dict) else None
+        status = status_of(task)
         name = status_name(status)
         if name != last:
             print(f"  status: {name}")
@@ -266,7 +286,7 @@ def wait_for_artifact(
             print(f"  artifact: {url}")
             return url
         if isinstance(status, int) and status in FAILURE_STATES:
-            reason = (task.get("message") or task.get("msg") or task.get("error") or "") if isinstance(task, dict) else ""
+            reason = error_of(task)
             raise AholoError(f"task {task_id} ended {name}: {reason or json.dumps(task)[:400]}")
         time.sleep(interval)
     raise AholoError(f"task {task_id} produced no artifact within {max_wait}s")

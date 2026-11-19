@@ -34,6 +34,25 @@ Aholo Lux3D  ──GLB/OBJ──▶  bridge  ──STL──▶  URDF <collision
 One sentence: **the asset becomes part of the experiment's identity, not a decoration around it.**
 一句话：**资产成为实验身份的一部分，而不是实验外面的一层装饰。**
 
+## WebGL viewer · 在浏览器里看这台机与它的资产
+
+`python bridge.py serve` 起一个本地页面：机械臂从 `fixtures/desk_arm.urdf` 解析出来（拖滑条就是 URDF 的限位），
+物体是 Lux3D 的 `.glb`，叠上去的半透明外壳是仿真台真正碰撞的 `.stl`；右栏是这条链的回执。
+
+```bash
+python bridge.py demo     # offline: a fixture asset to look at · 离线造一份可看的资产
+python bridge.py serve    # http://127.0.0.1:8137/
+```
+
+The arm is parsed from the URDF the bench consumes, the object is the Lux3D `.glb`, and the
+translucent shell is the `.stl` the bench actually collides with. **Generate is a real API call**:
+the page posts to `/api/generate`, the server creates a Lux3D task, polls the integer status,
+downloads the artifact, ingests it and the list reloads. Without a key the button is restricted to
+dry-run: the request body is printed, nothing is sent. API, status mapping and limits are in
+[`docs/WEBGL-VIEWER.md`](docs/WEBGL-VIEWER.md).
+
+![WebGL viewer](./demo/shots/07_viewer.png)
+
 ## Why this exists · 为什么做这个
 
 The Aholo Global 3D AI Hackathon scores 30% on "群核技术栈应用" and requires Lux3D to carry the core 3D content. A project that only shows a generated mesh has nothing to verify. A project that only shows numbers on a laptop cannot prove the numbers came from *that* mesh.
@@ -100,13 +119,16 @@ Auth is `Authorization: <key>` with **no** `Bearer` prefix.
 | `ingest` | `GLB`/`OBJ` → binary STL, plus `assets.lock.json` (sha256, triangles, bbox, asset id). |
 | `urdf` | Replaces one link's collision geometry with `package://<pkg>/<mesh>.stl`, stamped with the asset id. |
 | `bench` | Builds the `embodied_sim_collect` command; `--run` executes it in your checkout. |
+| `serve` | Serves the WebGL viewer, the artifact bytes and the Lux3D job API on `127.0.0.1:8137`. |
+| `robot` | Parses a URDF and prints what the viewer will draw (`--json` for the model). |
 | `verify` | Compares two receipt JSON files and names the first divergent path. |
 | `demo` | The offline chain, using the bundled fixture. |
 
 ## What is actually verified · 现在真正验证过什么
 
-- `python -m unittest discover -s tests` → **17 tests pass** (`GLB` parsing, deterministic asset ids, STL round-trip, URDF injection, command shaping, receipt diff, Lux3D wire contract).
+- `python -m unittest discover -s tests` → **38 tests pass** (`GLB` parsing, deterministic asset ids, STL round-trip, URDF injection, command shaping, receipt diff, Lux3D wire contract, URDF→viewer model, viewer API routes, a dry-run job, the HTTP layer).
 - `python bridge.py demo` → produces `out/demo/meshes/crate.stl`, `out/demo/urdf/desk_arm.urdf`, `out/demo/meshes/assets.lock.json` on a clean checkout.
+- `python bridge.py serve` → the viewer draws the arm from `fixtures/desk_arm.urdf` (4 links, 3 joints, 2 DoF) and the Lux3D `.glb`, with the `.stl` collision shell on a toggle. **One real generation ran end-to-end through the page's own endpoint on 2026-11-19**: `POST /api/generate` (`G1-Turbo`, `faceCount=10000`) → task `8396881`, `running → success` after ~110 s, `crate_web.glb` (9.5 MB) → **7,290 triangles, bbox 0.600 × 0.464 × 0.547 m, asset_id `55d204cf9851ca74`**, served back into the scene.
 - The generated URDF parses back clean (the injector re-parses its own output; a malformed description fails at write time, not at simulation time).
 - **A real Lux3D task ran end to end on 2026-11-19**: `text-to-3d`, `G1-Turbo`, `faceCount=30000` → `taskId=8389570`, `status=3` after ~2 min, one `tex_mesh.glb` (9.7 MB) → **21,874 triangles, bbox 0.600 × 0.511 × 0.535 m, asset_id `474c2fd22f0d3f9f`** → injected into `package://generated/crate_lux3d.stl`. Details in [`docs/AHOLO-LUX3D.md`](docs/AHOLO-LUX3D.md).
 - **The stamping chain then ran against the real engine on 2026-11-19** (OriEra 0.13.0, Rust 1.100, `rigid3d,cam,spec,urdf`): `desk_arm / 2 DoF`, 0 skipped links, `✓ 确定性复核（full）双跑逐位一致`, 2 episodes · 1400 transitions · 0% success (honest: a 2-DoF arm with a zero `home` cannot reach the table), 1400 real camera PNGs written. Numbers in [`docs/BENCH-COMMAND.md`](docs/BENCH-COMMAND.md) §3.1.
@@ -142,6 +164,7 @@ design file.
 - [`docs/PRODUCT.md`](docs/PRODUCT.md) — 产品目标：要缝的是什么、谁会用、明确不做什么、怎么算成了、路线图。
 - [`docs/BENCH-COMMAND.md`](docs/BENCH-COMMAND.md) — 把资产交给引擎的命令、参数与两个实测坑。
 - [`docs/AHOLO-LUX3D.md`](docs/AHOLO-LUX3D.md) — 两次真实生成的记录：参数、字节数、面数、资产 id。
+- [`docs/WEBGL-VIEWER.md`](docs/WEBGL-VIEWER.md) — 浏览器那半边：`serve` 命令、每个页面元素的数据来源、HTTP API、校验与边界。
 
 ## Honest limits · 边界，写出来不藏着
 
@@ -163,18 +186,24 @@ lux3d-embodied-bridge/
 │   ├── stl.py                # binary STL writer / reader
 │   ├── asset.py              # hash + bbox + asset lock
 │   ├── urdf.py               # collision mesh injection
+│   ├── robot.py              # URDF -> the model the viewer draws
+│   ├── server.py             # viewer API: static page + artifacts + one Lux3D job
 │   ├── bench.py              # upstream command builder
 │   ├── verify.py             # receipt diff
 │   └── cli.py                # subcommands
+├── web/                      # the WebGL page (no build step; three.js vendored)
 ├── fixtures/                 # cube.glb (generated), desk_arm.urdf
-├── tests/
-├── docs/                     # AHOLO-LUX3D.md, BENCH-COMMAND.md
+├── tests/                    # 38 offline tests
+├── docs/                     # AHOLO-API, PRODUCT, BENCH-COMMAND, WEBGL-VIEWER
 └── submission/               # hackathon report / demo script / post draft
 ```
 
 ## Status · 状态
 
-Verified on two machines. Windows 11 / Python 3.13.18: 17 tests pass, the offline demo writes its three artifacts, one real Lux3D generation was carried through to an injected STL, and the injected URDF re-parses. Linux x86_64 / Python 3.12 / Rust 1.100: the whole chain ran against a real engine checkout — the Lux3D GLB became an STL, was injected into the URDF, imported as a 2-DoF `RobotSpec`, collected 2 episodes, and passed `--verify-determinism full` (bit-identical double run). Two upstream CLI details only surface when you actually run it: `--verify-determinism` takes a value (`full|sample|off`), and paths must be absolute because cargo runs with the engine checkout as cwd. This bridge now does both.
+Verified on two machines. Windows 11 / Python 3.13.18: 17 tests at the time (38 now, after the viewer), the offline demo writes its three artifacts, one real Lux3D generation was carried through to an injected STL, and the injected URDF re-parses. Linux x86_64 / Python 3.12 / Rust 1.100: the whole chain ran against a real engine checkout — the Lux3D GLB became an STL, was injected into the URDF, imported as a 2-DoF `RobotSpec`, collected 2 episodes, and passed `--verify-determinism full` (bit-identical double run). Two upstream CLI details only surface when you actually run it: `--verify-determinism` takes a value (`full|sample|off`), and paths must be absolute because cargo runs with the engine checkout as cwd. This bridge now does both.
+
+The viewer half was added on top of that and verified the same day: 38 offline tests pass (17 original + 21 for URDF parsing, API routes, a dry-run job and the HTTP layer), and one **real** generation went through the page's own endpoint — `POST /api/generate` → task `8396881` → `crate_web` (7,290 tris, asset `55d204cf9851ca74`) → loaded back into the scene through `/api/asset/crate_web?kind=glb`. The screenshot above is that run: arm from the URDF, crate from Lux3D, receipt from the bench, all in one page.
+
 
 ## License · 许可
 

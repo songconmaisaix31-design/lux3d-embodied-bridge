@@ -42,6 +42,15 @@ def _first_divergence(a: Any, b: Any, path: str = "$") -> Tuple[bool, str]:
     return (True, path) if a == b else (False, f"{path}: {a!r} vs {b!r}")
 
 
+def compare_files(left_path: str, right_path: str) -> Tuple[bool, str]:
+    """Compare two receipt files without printing; used by the viewer's API.
+
+    Returns ``(same, where)``: when they differ, ``where`` is the first
+    divergent JSON path (``$.fingerprints.episode_fingerprints_v2[0]``).
+    """
+    return _first_divergence(_load(left_path), _load(right_path))
+
+
 def compare(paths: List[str]) -> int:
     if len(paths) != 2:
         raise SystemExit("verify needs exactly two files: <run-a.json> <run-b.json>")
