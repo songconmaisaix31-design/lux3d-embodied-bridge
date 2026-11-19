@@ -630,7 +630,7 @@ class App:
         return {
             "ok": True,
             "run": prepared["record"],
-            "dir": os.path.relpath(prepared["dir"], self.root).replace(os.sep, "/"),
+            "dir": pipeline.relpath(prepared["dir"], self.root),
             "engine": self.engine_status(),
         }
 

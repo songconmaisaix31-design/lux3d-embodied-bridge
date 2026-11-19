@@ -53,6 +53,18 @@ def _slug(text: str) -> str:
     return re.sub(r"[^0-9A-Za-z_-]+", "-", text).strip("-")[:40] or "run"
 
 
+def relpath(path: str, base: str) -> str:
+    """Forward-slash path relative to ``base``; falls back to absolute on another drive.
+
+    On Windows the run directory may live on ``C:`` while the checkout is on
+    ``D:`` (the tests do exactly that), and ``os.path.relpath`` raises there.
+    """
+    try:
+        return os.path.relpath(path, base).replace(os.sep, "/")
+    except ValueError:
+        return path.replace(os.sep, "/")
+
+
 def new_run_id(asset: str) -> str:
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     return f"{stamp}-{_slug(asset)}"
@@ -141,8 +153,8 @@ def prepare_run(
         "engine": engine,
         "command": command,
         "command_line": shell_line,
-        "urdf": os.path.relpath(urdf_out, repo_root).replace(os.sep, "/"),
-        "mesh": os.path.relpath(os.path.join(mesh_dir, stl_name), repo_root).replace(os.sep, "/"),
+        "urdf": relpath(urdf_out, repo_root),
+        "mesh": relpath(os.path.join(mesh_dir, stl_name), repo_root),
         "urdf_report": report,
         "status": "prepared",
     }
@@ -205,7 +217,7 @@ def dataset_summary(run_dir: str) -> Dict[str, Any]:
         with open(episodes, "r", encoding="utf-8") as handle:
             episode_count = sum(1 for line in handle if line.strip())
     return {
-        "path": os.path.relpath(root, run_dir).replace(os.sep, "/"),
+        "path": relpath(root, run_dir),
         "rows": info.get("total_episodes") or info.get("total_frames"),
         "episodes": episode_count,
         "info": {key: info[key] for key in ("codebase_version", "robot_type", "total_episodes", "total_frames", "fps") if key in info},
