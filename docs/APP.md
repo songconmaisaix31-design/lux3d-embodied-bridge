@@ -72,6 +72,7 @@ cargo run -p oriera-agent --example embodied_sim_collect \
 - **不需要 key 也能走完第 ② ③ ④ 步**。只有「生成」需要 `AHOLO_API_KEY`；没有 key 时页面只允许 dry-run。
 - **引擎必须是你自己的 checkout**。`--engine` 或 `ORIERA_ENGINE` 指过去；本仓库不 vendor 引擎、不复制引擎代码。
 - **`out/` 不进 git**。生成的 GLB、STL、数据集、回执都在本机；仓库里只留文档和截图。
+  想把 run 目录挪到别处用 `LUX3D_RUNS_DIR=/some/dir`（测试就是这么隔离的，不会往你的 `out/app/runs` 里写假 run）。
 - **Windows 上没有 MSVC 也能跑**：用 `stable-x86_64-pc-windows-gnu` + MinGW-w64 GCC
   （本次用 winlibs gcc 16.2；启动服务前 `RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu` 并在 PATH 里放 gcc）。
 - **并发**：服务端是 `ThreadingHTTPServer`，但页面只维护一个 job；Lux3D 的并发上限未公开（见 `docs/AHOLO-API.md` §9），不要按「无限」设计。

@@ -84,6 +84,15 @@ def write_engine_artifacts(run_dir, episodes=2):
 
 
 class PrepareTests(unittest.TestCase):
+    def setUp(self):
+        self._runs = tempfile.TemporaryDirectory()
+        self._env = mock.patch.dict(os.environ, {"LUX3D_RUNS_DIR": self._runs.name})
+        self._env.start()
+
+    def tearDown(self):
+        self._env.stop()
+        self._runs.cleanup()
+
     def test_prepare_writes_mesh_and_urdf(self):
         with tempfile.TemporaryDirectory() as tmp:
             stl_dir, entry = make_asset_dir(tmp)
@@ -114,12 +123,15 @@ class PrepareTests(unittest.TestCase):
 class TrainTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self._env = mock.patch.dict(os.environ, {"LUX3D_RUNS_DIR": os.path.join(self.tmp.name, "runs")})
+        self._env.start()
         self.asset_dir, self.entry = make_asset_dir(self.tmp.name)
         self.engine = os.path.join(self.tmp.name, "engine")
         os.makedirs(os.path.join(self.engine, "crates"), exist_ok=True)
         self.app = server.App(root=REPO_ROOT, key="", engine=self.engine, asset_dirs=[self.asset_dir])
 
     def tearDown(self):
+        self._env.stop()
         self.tmp.cleanup()
 
     def _fake_prepare(self, real):

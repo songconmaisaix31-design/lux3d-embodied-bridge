@@ -34,6 +34,14 @@ ID_RE = re.compile(r"^[0-9A-Za-z_.:-]{1,80}$")
 
 
 def runs_root(repo_root: str) -> str:
+    """Where run directories live.
+
+    ``LUX3D_RUNS_DIR`` moves them out of the checkout (the tests use it so a
+    test run never leaves a fake run in ``out/app/runs``).
+    """
+    override = os.environ.get("LUX3D_RUNS_DIR")
+    if override:
+        return os.path.abspath(override)
     return os.path.join(repo_root, RUNS_DIRNAME)
 
 
