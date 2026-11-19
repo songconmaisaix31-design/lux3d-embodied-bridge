@@ -110,6 +110,12 @@ Auth is `Authorization: <key>` with **no** `Bearer` prefix.
 - The generated URDF parses back clean (the injector re-parses its own output; a malformed description fails at write time, not at simulation time).
 - **A real Lux3D task ran end to end on 2026-11-19**: `text-to-3d`, `G1-Turbo`, `faceCount=30000` → `taskId=8389570`, `status=3` after ~2 min, one `tex_mesh.glb` (9.7 MB) → **21,874 triangles, bbox 0.600 × 0.511 × 0.535 m, asset_id `474c2fd22f0d3f9f`** → injected into `package://generated/crate_lux3d.stl`. Details in [`docs/AHOLO-LUX3D.md`](docs/AHOLO-LUX3D.md).
 - **The stamping chain then ran against the real engine on 2026-11-19** (OriEra 0.13.0, Rust 1.100, `rigid3d,cam,spec,urdf`): `desk_arm / 2 DoF`, 0 skipped links, `✓ 确定性复核（full）双跑逐位一致`, 2 episodes · 1400 transitions · 0% success (honest: a 2-DoF arm with a zero `home` cannot reach the table), 1400 real camera PNGs written. Numbers in [`docs/BENCH-COMMAND.md`](docs/BENCH-COMMAND.md) §3.1.
+- **The same receipt on two operating systems, 2026-11-19.** The identical GLB and the identical
+  spec produced `fingerprints.v2.json` twice — once on Linux x86_64 (Rust 1.100, glibc), once on
+  Windows 11 (Rust 1.100, `x86_64-pc-windows-gnu`). `python bridge.py verify linux.json windows.json`
+  → **MATCH on the whole tree** (every episode fingerprint, not just the header). Same `spec_hash
+  b84b3add08d4a9c3`, same `protocol_hash ff970c8a640a25c0`, same 1400 transitions — 66 steps/s on
+  Linux, 57 on Windows. If your reviewer's machine disagrees with yours, this is how you find out.
 
 ## Demo footage · 真实运行画面
 
