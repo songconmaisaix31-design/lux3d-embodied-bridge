@@ -1,18 +1,18 @@
-# 项目报告书（骨架 · 待填截图与数字）
+# Lux3D → 具身回执桥 · 项目报告书
 
-> 填写规则：`〔〕` 内是必须替换的内容。评委会按五个维度打分，所以下文标题顺序与
-> 评分权重一致——他们不需要自己找你做了什么。
+> 下文标题顺序与五个评分维度的权重一致。所有数字都来自 2026-11-19 的真实运行日志
+> （`demo/logs/`），截图来自同一次运行（`demo/shots/`）。
 
 ## 0. 基本信息
 
 | 项 | 内容 |
 |---|---|
-| 作品名 | 〔lux3d-embodied-bridge / 或你的中文名〕 |
+| 作品名 | Lux3D → 具身回执桥（lux3d-embodied-bridge） |
 | 一句话 | 用 Aholo Lux3D 生成 3D 资产，让每一次具身实验都带着可复核的回执。 |
-| 参赛者 | 〔姓名〕 |
+| 参赛者 | David Wang |
 | 仓库 | https://github.com/songconmaisaix31-design/lux3d-embodied-bridge |
-| Demo 视频 | 〔链接〕 |
-| 使用的 Aholo 能力 | Lux3D（图生 3D / 文生 3D，GLB 导出）；〔如用了 Viewer / LuxReal 再补〕 |
+| Demo 视频 | 〔待上传后填链接；分镜页见 `demo/STORYBOARD.html`〕 |
+| 使用的 Aholo 能力 | Lux3D 文生 3D（`text-to-3d`，G1-Turbo，`faceCount` 20000，`outputFormat` glb）；未使用 Viewer / LuxReal |
 
 ## 1. 问题：生成与复现之间有一道缝
 
@@ -45,24 +45,36 @@
 2. 同一个 `spec_hash` → 同一串逐集指纹。
 3. 改了资产 → `asset_id` 变，实验身份跟着变，旧回执不会再被误读。
 
-〔截图 1：Lux3D 生成界面 / 产物预览〕
-〔截图 2：`python bridge.py demo` 三步输出〕
-〔截图 3：URDF 里被替换的 collision 与 `oriera:asset` 注释〕
-〔截图 4：`✓ 确定性复核（full）：双跑逐位一致`〕
+![生成结果](../demo/shots/crate_live_iso.png)
+![离线三步](../demo/shots/01_demo.png)
+![URDF 注入](../demo/shots/04_urdf.png)
+![确定性复核](../demo/shots/05b_collect.png)
 
 ## 3. 群核技术栈应用（权重 30%）
 
 **Lux3D 不是素材来源之一，而是整条实验链的起点。**
 
-- 资产由 Lux3D 生成：〔写明 prompt、模式（文生/图生）、版本 G1 或 G1-Turbo、faceCount〕。
+- 资产由 Lux3D 生成：`text-to-3d`，G1-Turbo，`faceCount` 20000，`outputFormat` glb。prompt：
+  `a small wooden shipping crate with metal corner brackets, single object, centered`。
+  真任务 `taskId 8390507` → 10,329,668 字节 GLB → 14,902 三角面，包围盒 0.600 × 0.414 × 0.447 m。
 - 导出格式选择 GLB，理由是它带 PBR 材质且通用；随后本仓库把 GLB 转成仿真台唯一会
   全量解析的 STL——这一步是必要的工程判断，不是顺手。
 - `asset_id` 记录的是 Lux3D 返回字节的 sha256，因此「这个实验用的是哪次生成」可以被
   第三方复核。
-- 〔如果用到 Aholo Viewer：把 3DGS 产物放进 Viewer 截图，说明「看」和「算」用的是同一次
-  重建/生成。〕
+- 未使用 Aholo Viewer，也没有用 3DGS 产物：这条链路要的是**可解析的网格**，不是可看的高斯点。
+  如果接 Viewer，正确的说法应该是「同一次重建，既看又算」——本作品先把「算」这一半做实了。
 
-〔截图 5：assets.lock.json 的 asset_id 与 provenance〕
+![assets.lock.json](../demo/shots/05a_import.png)
+
+```json
+"crate_live": {
+  "asset_id": "6e593a666736fce0",
+  "source_sha256": "6bd0988aa40f44a3dd69e841859136893ffb73cfc1544da8f24ad35403a94ff6",
+  "stl_sha256": "cfe556a78fb715780ba0bfc149d8f3f4b4325fae0de1cad93a674ed251fcf929",
+  "triangles": 14902,
+  "provenance": { "task_id": "8390507", "tool": "Aholo Lux3D", "version": "G1-Turbo", "mode": "text-to-3d" }
+}
+```
 
 ## 4. 有趣程度（权重 25%）
 
@@ -76,8 +88,11 @@
 这个「红一下」的瞬间是全片的钩子：大多数 AI 3D 作品只能展示好看，这个作品能展示
 「好看的东西被抓住并被记账」。
 
-〔截图 6：视频里 3 帧关键画面：生成 / 抓取 / 回执〕
-〔一句话传播钩子：生成模型第一次为自己的产物签了张收据。〕
+![引擎相机帧](../demo/shots/engine_frames_grid.png)
+
+视频里的「抓取」段是引擎自己的相机输出（`demo/shots/engine_top_camera_ep0.mp4`，700 帧 @30fps），
+不是渲染图。
+**传播钩子**：生成模型第一次为自己的产物签了张收据——收据是逐位可复核的。
 
 ## 5. 创新性（权重 20%）
 
@@ -90,7 +105,8 @@
 | 失败时静默降级 | 降级必须可见（引擎的 `degrade_is_visible_not_silent` 纪律） |
 | 资产与实验脱钩 | 资产哈希进入实验身份 |
 
-〔可补一句：为什么不是另一个 Isaac Lab——因为这里不重造物理，只补记账层。〕
+为什么不是另一个 Isaac Lab / MuJoCo 封装：这里不重造物理，只补记账层。引擎是上游现成的，
+本仓库只在「生成资产 → 仿真输入」这条缝上加一个可验证的身份。
 
 ## 6. 完成度（权重 20%）
 
@@ -98,7 +114,8 @@
 
 已验证（本机实测）：
 
-- `python -m unittest discover -s tests -v` → 9 个用例通过；
+- `python -m unittest discover -s tests -v` → **17 个用例通过**（GitHub Actions 在 Ubuntu 3.10 / 3.13
+  与 Windows 3.13 上各跑一遍，全绿）；
 - `python bridge.py demo` → 写出 `crate.stl`、`desk_arm.urdf`、`assets.lock.json`；
 - 注入后的 URDF 能回读解析（写坏在写入时失败，不留给仿真）。
 
@@ -114,35 +131,51 @@ python -m unittest discover -s tests -v
 接引擎：
 
 ```bash
-python bridge.py bench --engine /path/to/OriEra --out out/demo --run
+python bridge.py bench --engine /path/to/OriEra --out out/live --episodes 2 --cam --run
 ```
+
+**这一行在真实引擎上跑过**（Linux x86_64 / Rust 1.100 / OriEra 0.13.0）：
+
+| 项 | 实测 |
+|---|---|
+| 导入 | `desk_arm / 2 DoF`，skipped 0 条，警告 1 条（`home` 全零） |
+| 复核 | `✓ 确定性复核（full）：双跑逐位一致` |
+| 采集 | 2 集 · 1400 transitions · 成功 0 集（0%）· 66 steps/s |
+| 评测 | 0.0%（Wilson CI [0.0%, 65.8%]）· 指纹 v2 |
+| 落盘 | `robot.json`、`fingerprints.v2.json`、1400 张 168×168 相机 PNG |
+
+成功率 0% 是**如实结果**而不是 bug：2 自由度桌面臂 + `home` 全零的 URDF 零位够不到台面方块。
+本作品主张的不是「成功率好看」，而是「回执一致」。
 
 边界（写出来，不藏）：
 
 - 凸包是保守近似，内凹几何碰撞精确性有限；
 - 上游对 GLB 只做探针，因此本作品强制落 STL；
 - Lux3D 不同入口字段名不一致，请求体可覆盖，不做「猜对了」的假设；
-- 〔填：Rust 侧命令在本机是否实跑过；若未跑，如实写「命令形状来自引擎 CLI 文档，
-  实跑在〔机器/时间〕完成」〕
+- Rust 侧**已实跑**：2026-11-19 在 Linux 云主机上 `cargo build` 成功后执行
+  `embodied_sim_collect`（`--features rigid3d,cam,spec,urdf`），确定性复核通过；
+  实跑中暴露并修掉了两个上游 CLI 差异：`--verify-determinism` 需带值（`full|sample|off`），
+  且因 cargo 以引擎目录为 cwd，所有路径必须绝对。
 
 ## 7. 传播（权重 5%）
 
-- 小红书发布链接：〔链接〕，带 `#Aholo黑客松`，结果公布前保持公开。
+- 小红书发布链接：〔发布后填〕，带 `#Aholo黑客松`，结果公布前保持公开。
 - 一句话文案：〔见 submission/XIAOHONGSHU.md〕
 
 ## 8. 资产迭代对比
 
 | 轮次 | 输入 | 三角数 | 包围盒 (m) | asset_id | 备注 |
 |---|---|---|---|---|---|
-| v1 | 〔prompt/图〕 | 〔〕 | 〔〕 | 〔〕 | 〔太糊 / 比例不对 / 材质缺失〕 |
-| v2 | 〔调整后的 prompt〕 | 〔〕 | 〔〕 | 〔〕 | 〔改进点〕 |
-| v3 | 〔〕 | 〔〕 | 〔〕 | 〔〕 | 〔最终采用〕 |
+| v1 | `a small wooden shipping crate with metal corner brackets, single object, centered`（probe，`faceCount` 10000） | 21,874 | — | `474c2fd22f0d3f9f` | 首轮探针：结构对，但面数偏高、壁厚偏厚 |
+| v2 | 同上 prompt，`faceCount` 20000，G1-Turbo（`taskId 8390507`） | 14,902 | 0.600 × 0.414 × 0.447 | `6e593a666736fce0` | 采用：轮廓干净、包围盒落在桌面尺度、14,902 面足以让凸包收敛 |
+| v3 | 未做 | — | — | — | 时间预算投给了引擎侧的真实回执，而不是第三轮外观调优 |
 
-〔截图 7：三轮产物的并排对比〕
+![转台](../demo/shots/crate_live_turntable.mp4)
 
 ## 9. 复盘
 
 - 今晚唯一新增的代码是这条接缝（GLB→STL→URDF→命令），引擎本体一行没改；
+- 真实运行改掉的两处不是「适配」，是**上游文档与真实 CLI 的偏差**——只有跑过才会发现；
 - 如果再多一天，会做：把 `asset_id` 折进 `spec_hash` 的显式字段、把 3DGS 产物接进
   Viewer 做「同一次重建，既看又算」的对照；
 - 已知未做：多资产场景、非凸碰撞（凸分解）、厘米/米单位自动识别。

@@ -111,6 +111,24 @@ Auth is `Authorization: <key>` with **no** `Bearer` prefix.
 - **A real Lux3D task ran end to end on 2026-11-19**: `text-to-3d`, `G1-Turbo`, `faceCount=30000` → `taskId=8389570`, `status=3` after ~2 min, one `tex_mesh.glb` (9.7 MB) → **21,874 triangles, bbox 0.600 × 0.511 × 0.535 m, asset_id `474c2fd22f0d3f9f`** → injected into `package://generated/crate_lux3d.stl`. Details in [`docs/AHOLO-LUX3D.md`](docs/AHOLO-LUX3D.md).
 - **The stamping chain then ran against the real engine on 2026-11-19** (OriEra 0.13.0, Rust 1.100, `rigid3d,cam,spec,urdf`): `desk_arm / 2 DoF`, 0 skipped links, `✓ 确定性复核（full）双跑逐位一致`, 2 episodes · 1400 transitions · 0% success (honest: a 2-DoF arm with a zero `home` cannot reach the table), 1400 real camera PNGs written. Numbers in [`docs/BENCH-COMMAND.md`](docs/BENCH-COMMAND.md) §3.1.
 
+## Demo footage · 真实运行画面
+
+Everything on this page is a screenshot of a real run on 2026-11-19 — real Lux3D task,
+real GLB, real engine, real receipt. Nothing here is a mockup or a re-render of a
+design file.
+
+![real Lux3D task](./demo/shots/03_generate.png)
+![real engine run](./demo/shots/05b_collect.png)
+![receipt match and divergence](./demo/shots/06_verify.png)
+
+- [`demo/STORYBOARD.html`](demo/STORYBOARD.html) — the full 90-second cut, section by section.
+- [`demo/shots/engine_top_camera_ep0.mp4`](demo/shots/engine_top_camera_ep0.mp4) — 700 frames the
+  engine actually rendered for episode 0 (30 fps, no interpolation).
+- [`demo/shots/crate_live_turntable.mp4`](demo/shots/crate_live_turntable.mp4) — the Lux3D asset
+  rotating, built from the same triangle soup the STL was written from.
+- `./demo/run_all.sh offline` reproduces the offline frames; `./demo/run_all.sh live` re-runs
+  the whole chain (needs `AHOLO_API_KEY` and `ORIERA_ENGINE`).
+
 ## Honest limits · 边界，写出来不藏着
 
 - **GLB is not the bench's native format.** The upstream bench probes GLB but parses STL into a convex hull. This bridge therefore converts; a GLB handed straight to the bench degrades to a link-segment envelope. That is why the STL step exists, not as a convenience.

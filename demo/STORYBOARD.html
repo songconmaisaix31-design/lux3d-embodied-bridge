@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Lux3D → 具身回执 · 真实操作画面</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --fg:#c9d1d9; --dim:#8b949e; --ok:#3fb950; --cy:#56b4c2; --warn:#d29922; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:16px/1.65 -apple-system,"PingFang SC","Noto Sans CJK SC","Microsoft YaHei",sans-serif; }
+  header { padding:44px 40px 28px; border-bottom:1px solid var(--line); }
+  header h1 { margin:0 0 10px; font-size:30px; letter-spacing:.4px; }
+  header p { margin:0; color:var(--dim); font-size:15px; max-width:820px; }
+  .badges { margin-top:18px; display:flex; gap:10px; flex-wrap:wrap; }
+  .badge { border:1px solid var(--line); border-radius:999px; padding:5px 12px; font-size:13px; color:var(--dim); }
+  .badge b { color:var(--fg); font-weight:600; }
+  main { max-width:1180px; margin:0 auto; padding:18px 40px 80px; }
+  section.beat { border:1px solid var(--line); border-radius:14px; background:var(--panel); margin:26px 0; overflow:hidden; }
+  .beat-head { display:flex; align-items:baseline; gap:14px; padding:16px 22px; border-bottom:1px solid var(--line); }
+  .t { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--cy); font-size:13px; }
+  .beat-head h2 { margin:0; font-size:18px; font-weight:650; }
+  .beat-body { padding:20px 22px 24px; }
+  .beat-body img, .beat-body video { width:100%; border-radius:8px; border:1px solid var(--line); display:block; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .cap { color:var(--dim); font-size:13px; margin:10px 0 18px; }
+  .cap b { color:var(--fg); }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; background:#0b0f14; border:1px solid var(--line);
+         padding:1px 6px; border-radius:5px; font-size:13px; color:#e6edf3; }
+  .note { border-left:3px solid var(--warn); padding:10px 14px; background:#1c1810; border-radius:0 8px 8px 0; font-size:14px; color:#e3c27a; margin:16px 0 0; }
+  footer { color:var(--dim); font-size:13px; padding:0 40px 60px; max-width:1180px; margin:0 auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Lux3D → 具身回执 · 真实操作画面</h1>
+  <p>这一页里的每一张图、每一帧视频，都来自 2026-11-19 在 Linux 上真实跑过的进程：Aholo Lux3D 真任务、真 GLB、真 STL、真引擎、真回执。没有补拍、没有重绘、没有 AI 生成画面。</p>
+  <div class="badges">
+    <span class="badge">Lux3D task <b>8390507</b></span>
+    <span class="badge">GLB <b>10.3 MB</b> → STL <b>14,902 面</b></span>
+    <span class="badge">asset <b>6e593a666736fce0</b></span>
+    <span class="badge">引擎 <b>OriEra 0.13.0</b></span>
+    <span class="badge">复核 <b>双跑逐位一致</b></span>
+  </div>
+</header>
+<main>
+
+<section class="beat">
+  <div class="beat-head"><span class="t">0:08–0:20</span><h2>Lux3D 生成的物件</h2></div>
+  <div class="beat-body">
+    <div class="grid2">
+      <div>
+        <img src="shots/crate_live_iso.png" alt="crate iso">
+        <p class="cap"><b>GLB 原始网格</b>：14,902 三角面，包围盒 0.600 × 0.414 × 0.447 m。由本仓库自己的解析器读出，不是查看器截图。</p>
+      </div>
+      <div>
+        <video src="shots/crate_live_turntable.mp4" autoplay muted loop playsinline></video>
+        <p class="cap"><b>转台</b>：同一份三角面数据转 360°，8 秒循环。重新渲染：<code>--turntable 24</code>。</p>
+      </div>
+    </div>
+    <p class="note">如果录视频时想现场生成，先跑 <code>python3 bridge.py generate --prompt "…" --version G1-Turbo --face-count 20000</code>，实测约 10 分钟（含排队），别现场等。</p>
+  </div>
+</section>
+
+<section class="beat">
+  <div class="beat-head"><span class="t">0:20–0:30</span><h2>真任务：一句 prompt → 一个文件</h2></div>
+  <div class="beat-body">
+    <img src="shots/03_generate.png" alt="generate">
+    <p class="cap">创建即返回 <code>taskId</code>，轮询到 <code>status=3</code>，从 <code>outputs[0].content</code> 取下载地址，立刻落盘再入账（URL 只有约 2 小时）。</p>
+  </div>
+</section>
+
+<section class="beat">
+  <div class="beat-head"><span class="t">0:30–0:40</span><h2>身份写进引擎真正读取的那份描述</h2></div>
+  <div class="beat-body">
+    <img src="shots/04_urdf.png" alt="urdf">
+    <p class="cap"><code>&lt;collision&gt;</code> 被换成 <code>package://generated/crate_live.stl</code>，asset id 以注释形式留在同一行上下文里——改一个字节，id 就变。</p>
+  </div>
+</section>
+
+<section class="beat">
+  <div class="beat-head"><span class="t">0:40–0:55</span><h2>真引擎跑起来</h2></div>
+  <div class="beat-body">
+    <img src="shots/05a_import.png" alt="import">
+    <p class="cap"><b>导入阶段</b>：2 DoF、skipped 0、警告 1 条（<code>home</code> 全零）。引擎不会静默改你的模型，它把出口写在屏幕上。</p>
+    <img src="shots/05b_collect.png" alt="collect" style="margin-top:14px">
+    <p class="cap"><b>采集阶段</b>：2 集 · 1400 transitions · 0% 成功率 —— 如实报告；4 轴预设外的构型，硬闸自动降到 report。</p>
+    <div class="grid2" style="margin-top:18px">
+      <div>
+        <video src="shots/engine_top_camera_ep0.mp4" autoplay muted loop playsinline></video>
+        <p class="cap"><b>episode 0 的相机帧</b>（700 帧 @30fps，真实输出，未插帧）。橙色方块是任务里的 cube，绿点是目标区。</p>
+      </div>
+      <div>
+        <img src="shots/engine_frames_grid.png" alt="frames grid">
+        <p class="cap">同一条 episode 的四个时刻：机器人在左，方块在台面，目标在右。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="beat">
+  <div class="beat-head"><span class="t">0:55–1:20</span><h2>回执：一样，和不一样</h2></div>
+  <div class="beat-body">
+    <img src="shots/06_verify.png" alt="verify">
+    <p class="cap">上半是两次跑逐位相同；下半是把一份回执故意改一位，工具立刻指出第一条分歧的路径。<b>不一致从不悄悄兜底。</b></p>
+    <img src="shots/01_demo.png" alt="demo" style="margin-top:16px">
+    <p class="cap">离线链路（不联网、不花钱）：fixture GLB → STL → URDF → 打印引擎命令。</p>
+    <img src="shots/00_tests.png" alt="tests" style="margin-top:16px">
+    <p class="cap">17 条单测，CI 在 Ubuntu 3.10 / 3.13 与 Windows 3.13 上各跑一遍。</p>
+  </div>
+</section>
+
+</main>
+<footer>
+  <p>复现：<code>./demo/run_all.sh live</code>（需 <code>.env</code> 里的 AHOLO_API_KEY 与 <code>ORIERA_ENGINE</code>）。原始日志在 <code>demo/logs/</code>，产物在 <code>lux3d-embodied-bridge/out/live/</code>。</p>
+  <p>仓库：github.com/songconmaisaix31-design/lux3d-embodied-bridge</p>
+</footer>
+</body>
+</html>
